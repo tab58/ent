@@ -23,6 +23,7 @@ Before signaling phase completion, update `.claudemod/SESSION_STATE.json` with t
 ```
 {
   "action": "advance",
+  "phase": <the name of the phase that just completed>,
   "discussion_summary": <3-4 line summary of discussion>,
   "recommendation": <2-3 line summary of what to focus on>
 }
@@ -177,7 +178,7 @@ Follow these steps:
 
 ### tdd-red
 
-Write test cases for all the tasks in the `.claudemod/FIX_PLAN.md` file.
+Write test cases for all the uncompleted tasks in the `.claudemod/FIX_PLAN.md` file.
 For each task:
 
 1. Define the interface/contract using language-appropriate constructs. Examples include:

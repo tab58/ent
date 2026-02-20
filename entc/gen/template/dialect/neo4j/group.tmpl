@@ -1,0 +1,35 @@
+{{/*
+Copyright 2019-present Facebook Inc. All rights reserved.
+This source code is licensed under the Apache 2.0 license found
+in the LICENSE file in the root directory of this source tree.
+*/}}
+
+{{/* gotype: entgo.io/ent/entc/gen.typeScope */}}
+
+{{ define "dialect/neo4j/group" }}
+{{ $builder := pascal $.Scope.Builder }}
+{{ $receiver := $.Scope.Receiver }}
+
+func ({{ $receiver }} *{{ $builder }}) neo4jScan(ctx context.Context, root *{{ $.QueryName }}, v any) error {
+	var (
+		aggs []string
+	)
+	for _, fn := range {{ $receiver }}.fns {
+		aggs = append(aggs, fn(""))
+	}
+	b := root.neo4jQuery(ctx)
+	{{- /* Build WITH clause for grouping. */}}
+	groupFields := make([]string, len(*{{ $receiver }}.flds))
+	for i, f := range *{{ $receiver }}.flds {
+		groupFields[i] = fmt.Sprintf("n.%s", f)
+	}
+	returnExprs := append(groupFields, aggs...)
+	b.Return(returnExprs...)
+	query, params := b.Query()
+	res := &neo4j.Response{}
+	if err := {{ $receiver }}.build.driver.Exec(ctx, query, params, res); err != nil {
+		return err
+	}
+	return res.Scan(v)
+}
+{{ end }}

@@ -1,0 +1,60 @@
+{{/*
+Copyright 2019-present Facebook Inc. All rights reserved.
+This source code is licensed under the Apache 2.0 license found
+in the LICENSE file in the root directory of this source tree.
+*/}}
+
+{{/* gotype: entgo.io/ent/entc/gen.Graph */}}
+
+{{ define "dialect/neo4j/order/signature" -}}
+	// OrderFunc applies an ordering on the cypher query builder.
+	type OrderFunc func(*cypher.Builder)
+{{- end }}
+
+{{ define "dialect/neo4j/order/func" -}}
+	{{- $order := $.Scope.Order -}}
+	func(b *cypher.Builder) {
+		for _, f := range fields {
+			b.OrderBy(fmt.Sprintf("n.%s {{ upper $order }}", f))
+		}
+	}
+{{- end }}
+
+{{/* custom signature for group-by function */}}
+{{ define "dialect/neo4j/group/signature" -}}
+	// AggregateFunc applies an aggregation on the cypher query builder.
+	type AggregateFunc func(string) string
+{{- end }}
+
+{{ define "dialect/neo4j/group/as" -}}
+	func(_ string) string {
+		return fn(end)
+	}
+{{- end }}
+
+{{ define "dialect/neo4j/group/func" -}}
+	{{- $fn := $.Scope.Func -}}
+	{{- $withField := $.Scope.WithField -}}
+	func(end string) string {
+		if end == "" {
+			end = Default{{ $fn }}Label
+		}
+		{{- if $withField }}
+			return fmt.Sprintf("{{ lower $fn }}(n.%s) AS %s", field, end)
+		{{- else }}
+			return fmt.Sprintf("{{ lower $fn }}(n) AS %s", end)
+		{{- end }}
+	}
+{{- end }}
+
+{{/* optional constants for group-by default values. */}}
+{{ define "dialect/neo4j/group/const" -}}
+	{{- $fn := $.Scope.Func }}
+	{{- $name := $.Scope.Name }}
+	{{- $pkg := base $.Config.Package }}
+	// Default{{ $fn }}Label is the default label name for the {{ $fn }} aggregation function.
+	// It should be used as the struct-tag for decoding, or a map key for interaction with the returned response.
+	// In order to {{ quote $name }} 2 or more fields and avoid conflicting, use the `{{ $pkg }}.As({{ $pkg }}.{{ $fn }}(field), "custom_name")`
+	// function with custom name in order to override it.
+	const Default{{ $fn }}Label = {{ quote $name }}
+{{- end }}

@@ -20,7 +20,7 @@ Provide a Go text template system for generating dialect-specific entity code, s
   - `where.tmpl` - Predicate functions
   - `builder/*.tmpl` - Create, Update, Delete, Query builders
 
-- **Dialect Templates** (`entc/gen/template/dialect/{sql,gremlin}/`):
+- **Dialect Templates** (`entc/gen/template/dialect/{sql,gremlin,neo4j}/`):
   - `create.tmpl` - Entity creation (INSERT / traversal)
   - `query.tmpl` - Entity queries (SELECT / traversal)
   - `update.tmpl` - Entity updates (UPDATE / traversal)
