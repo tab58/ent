@@ -1,0 +1,144 @@
+{{/*
+Copyright 2019-present Facebook Inc. All rights reserved.
+This source code is licensed under the Apache 2.0 license found
+in the LICENSE file in the root directory of this source tree.
+*/}}
+
+{{/* gotype: entgo.io/ent/entc/gen.typeScope */}}
+
+{{ define "dialect/neo4j/update" }}
+{{ $pkg := $.Scope.Package }}
+{{ $builder := pascal $.Scope.Builder }}
+{{ $receiver := $.Scope.Receiver }}
+{{ $mutation := print $receiver ".mutation" }}
+{{ $one := hasSuffix $builder "One" }}
+{{ $zero := 0 }}{{ if $one }}{{ $zero = "nil" }}{{ end }}
+
+func ({{ $receiver }} *{{ $builder }}) neo4jSave(ctx context.Context) ({{- if $one }}*{{ $.Name }}{{ else }}int{{ end }}, error) {
+	{{- if $.HasUpdateCheckers }}
+		if err := {{ $receiver }}.check(); err != nil {
+			return {{ $zero }}, err
+		}
+	{{- end }}
+	res := &neo4j.Response{}
+	{{- if $one }}
+		id, ok := {{ $mutation }}.{{ $.ID.MutationGet }}()
+		if !ok {
+			return {{ $zero }}, &ValidationError{Name: "{{ $.ID.Name }}", err: errors.New(`{{ $pkg }}: missing "{{ $.Name }}.{{ $.ID.Name }}" for update`)}
+		}
+		query, params := {{ $receiver }}.neo4j(id).Query()
+	{{- else }}
+		query, params := {{ $receiver }}.neo4j().Query()
+	{{- end }}
+	if err := {{ $receiver }}.driver.Exec(ctx, query, params, res); err != nil {
+		return {{ $zero }}, err
+	}
+	if err, ok := isConstraintError(res); ok {
+		return {{ $zero }}, err
+	}
+	{{ $mutation }}.done = true
+	{{- if $one }}
+		{{- $r := $.Receiver }}
+		{{ $r }} := &{{ $.Name }}{config: {{ $receiver }}.config}
+		if err := {{ $r }}.FromResponse(res); err != nil {
+			return nil, err
+		}
+		return {{ $r }}, nil
+	{{- else }}
+		return res.ReadInt()
+	{{- end }}
+}
+
+func ({{ $receiver }} *{{ $builder }}) neo4j({{ if $one }}id {{ $.ID.Type }}{{ end }}) *cypher.Builder {
+	b := cypher.New()
+	{{- if $one }}
+		idP := b.AddParam(id)
+		b.Match(fmt.Sprintf("(n:%s) WHERE n.id = %s", {{ $.Package }}.Label, idP))
+	{{- else }}
+		b.Match(fmt.Sprintf("(n:%s)", {{ $.Package }}.Label))
+		for _, p := range {{ $mutation }}.predicates {
+			p(b)
+		}
+	{{- end }}
+	{{- range $f := $.MutationFields }}
+		{{- if or (not $f.Immutable) $f.UpdateDefault }}
+			if value, ok := {{ $mutation }}.{{ $f.MutationGet }}(); ok {
+				{{- if $f.Unique }}
+					existP := b.AddParam(value)
+					b.Match(fmt.Sprintf("OPTIONAL MATCH (existing:%s {%s: %s})", {{ $.Package }}.Label, {{ $.Package }}.{{ $f.Constant }}, existP))
+					b.Where("existing IS NULL")
+				{{- end }}
+				p := b.AddParam(value)
+				b.Set(fmt.Sprintf("n.%s = %s", {{ $.Package }}.{{ $f.Constant }}, p))
+			}
+			{{- if $f.SupportsMutationAdd }}
+				if value, ok := {{ $mutation }}.Added{{ $f.StructField }}(); ok {
+					p := b.AddParam(value)
+					b.Set(fmt.Sprintf("n.%s = n.%s + %s", {{ $.Package }}.{{ $f.Constant }}, {{ $.Package }}.{{ $f.Constant }}, p))
+				}
+			{{- end }}
+		{{- end }}
+	{{- end }}
+	{{- /* clear optional fields. */}}
+	{{- with $.HasOptional }}
+		{{- range $f := $.MutationFields }}
+			{{- if $f.Optional }}
+				if {{ $mutation }}.{{ $f.StructField }}Cleared() {
+					b.Remove(fmt.Sprintf("n.%s", {{ $.Package }}.{{ $f.Constant }}))
+				}
+			{{- end }}
+		{{- end }}
+	{{- end }}
+	{{- range $e := $.Edges }}
+		{{- $name := printf "%s.%s" $.Package $e.LabelConstant }}
+		{{- if $e.IsInverse }}
+			{{- $name = printf "%s.%s" $e.Type.Package $e.LabelConstant }}
+		{{- end }}
+		{{- /* remove edges */}}
+		{{- if $e.Unique }}
+			if {{ $mutation }}.{{ $e.StructField }}Cleared() {
+				{{- if $e.IsInverse }}
+					b.Match(fmt.Sprintf("WITH n OPTIONAL MATCH (n)<-[r_%s:%s]-()", "{{ $e.Name }}", {{ $name }}))
+				{{- else }}
+					b.Match(fmt.Sprintf("WITH n OPTIONAL MATCH (n)-[r_%s:%s]->()", "{{ $e.Name }}", {{ $name }}))
+				{{- end }}
+				b.Delete(fmt.Sprintf("r_%s", "{{ $e.Name }}"))
+			}
+		{{- else }}
+			for _, id := range {{ $mutation }}.Removed{{ $e.StructField }}IDs() {
+				rmP := b.AddParam(id)
+				{{- if $e.IsInverse }}
+					b.Match(fmt.Sprintf("WITH n MATCH (n)<-[r:%s]-(m) WHERE m.id = %s", {{ $name }}, rmP))
+				{{- else }}
+					b.Match(fmt.Sprintf("WITH n MATCH (n)-[r:%s]->(m) WHERE m.id = %s", {{ $name }}, rmP))
+				{{- end }}
+				b.Delete("r")
+			}
+		{{- end }}
+		{{- /* add edges */}}
+		for _, id := range {{ $mutation }}.{{ $e.StructField }}IDs() {
+			addP := b.AddParam(id)
+			b.Match(fmt.Sprintf("WITH n MATCH (m:%s) WHERE m.id = %s", {{ $e.Type.Package }}.Label, addP))
+			{{- if $e.IsInverse }}
+				b.Create(fmt.Sprintf("(m)-[:%s]->(n)", {{ $name }}))
+			{{- else }}
+				b.Create(fmt.Sprintf("(n)-[:%s]->(m)", {{ $name }}))
+			{{- end }}
+		}
+	{{- end }}
+	{{- if $one }}
+		if len({{ $receiver }}.fields) > 0 {
+			fields := make([]string, len({{ $receiver }}.fields))
+			for i, f := range {{ $receiver }}.fields {
+				fields[i] = fmt.Sprintf("n.%s", f)
+			}
+			b.Return(fields...)
+		} else {
+			b.Return("n {.*}")
+		}
+	{{- else }}
+		b.Return("count(n)")
+	{{- end }}
+	return b
+}
+{{ end }}

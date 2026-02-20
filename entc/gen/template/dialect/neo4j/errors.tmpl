@@ -1,0 +1,36 @@
+{{/*
+Copyright 2019-present Facebook Inc. All rights reserved.
+This source code is licensed under the Apache 2.0 license found
+in the LICENSE file in the root directory of this source tree.
+*/}}
+
+{{/* gotype: entgo.io/ent/entc/gen.Graph */}}
+
+{{/* custom errors and error handlers for neo4j dialect */}}
+{{ define "dialect/neo4j/errors" }}
+
+// NewErrUniqueField creates a constraint error for unique fields.
+func NewErrUniqueField(label, field string, v any) *ConstraintError {
+	return &ConstraintError{msg: fmt.Sprintf("field %s.%s with value: %#v", label, field, v)}
+}
+
+// NewErrUniqueEdge creates a constraint error for unique edges.
+func NewErrUniqueEdge(label, edge, id string) *ConstraintError {
+	return &ConstraintError{msg: fmt.Sprintf("edge %s.%s with id: %#v", label, edge, id)}
+}
+
+// isConstraintError checks if the Neo4j response indicates a uniqueness
+// constraint violation. In the Neo4j dialect, uniqueness is enforced at the
+// application level via OPTIONAL MATCH guards. When the guard detects a
+// duplicate, the query returns zero rows.
+func isConstraintError(r *neo4j.Response) (*ConstraintError, bool) {
+	maps, err := r.ReadNodeMaps()
+	if err != nil {
+		return nil, false
+	}
+	if len(maps) == 0 {
+		return &ConstraintError{msg: "neo4j: unique constraint violation"}, true
+	}
+	return nil, false
+}
+{{ end }}

@@ -1,0 +1,165 @@
+{{/*
+Copyright 2019-present Facebook Inc. All rights reserved.
+This source code is licensed under the Apache 2.0 license found
+in the LICENSE file in the root directory of this source tree.
+*/}}
+
+{{/* gotype: entgo.io/ent/entc/gen.typeScope */}}
+
+{{ define "dialect/neo4j/predicate/id" -}}
+	func(b *cypher.Builder) {
+		p := b.AddParam(id)
+		b.Where(fmt.Sprintf("n.id = %s", p))
+	}
+{{- end }}
+
+{{ define "dialect/neo4j/predicate/id/ops" -}}
+	{{- $op := $.Scope.Op -}}
+	{{- $arg := $.Scope.Arg -}}
+	{{- $storage := $.Scope.Storage -}}
+	func(b *cypher.Builder) {
+		{{- if $op.Variadic }}
+			v := make([]any, len({{ $arg }}))
+			for i := range v {
+				v[i] = {{ $arg }}[i]
+			}
+			p := b.AddParam(v)
+		{{- else }}
+			p := b.AddParam({{ $arg }})
+		{{- end }}
+		b.Where(fmt.Sprintf("n.id %s %s", {{ quote (call $storage.OpCode $op) }}, p))
+	}
+{{- end }}
+
+{{ define "dialect/neo4j/predicate/field" -}}
+	{{- $f := $.Scope.Field -}}
+	{{- $arg := $.Scope.Arg -}}
+	func(b *cypher.Builder) {
+		p := b.AddParam({{ $arg }})
+		b.Where(fmt.Sprintf("n.%s = %s", {{ $f.Constant }}, p))
+	}
+{{- end }}
+
+{{ define "dialect/neo4j/predicate/field/ops" -}}
+	{{- $f := $.Scope.Field -}}
+	{{- $op := $.Scope.Op -}}
+	{{- $arg := $.Scope.Arg -}}
+	{{- $storage := $.Scope.Storage -}}
+	func(b *cypher.Builder) {
+		{{- if $op.Niladic }}
+			{{- if eq (call $storage.OpCode $op) "IsNull" }}
+				b.Where(fmt.Sprintf("n.%s IS NULL", {{ $f.Constant }}))
+			{{- else if eq (call $storage.OpCode $op) "NotNull" }}
+				b.Where(fmt.Sprintf("n.%s IS NOT NULL", {{ $f.Constant }}))
+			{{- end }}
+		{{- else }}
+			{{- if $op.Variadic }}
+				v := make([]any, len({{ $arg }}))
+				for i := range v {
+					v[i] = {{ $arg }}[i]
+				}
+				p := b.AddParam(v)
+			{{- else }}
+				p := b.AddParam({{ $arg }})
+			{{- end }}
+			{{- $code := call $storage.OpCode $op }}
+			{{- if eq $code "EQ" }}
+				b.Where(fmt.Sprintf("n.%s = %s", {{ $f.Constant }}, p))
+			{{- else if eq $code "NEQ" }}
+				b.Where(fmt.Sprintf("n.%s <> %s", {{ $f.Constant }}, p))
+			{{- else if eq $code "GT" }}
+				b.Where(fmt.Sprintf("n.%s > %s", {{ $f.Constant }}, p))
+			{{- else if eq $code "GTE" }}
+				b.Where(fmt.Sprintf("n.%s >= %s", {{ $f.Constant }}, p))
+			{{- else if eq $code "LT" }}
+				b.Where(fmt.Sprintf("n.%s < %s", {{ $f.Constant }}, p))
+			{{- else if eq $code "LTE" }}
+				b.Where(fmt.Sprintf("n.%s <= %s", {{ $f.Constant }}, p))
+			{{- else if eq $code "In" }}
+				b.Where(fmt.Sprintf("n.%s IN %s", {{ $f.Constant }}, p))
+			{{- else if eq $code "NotIn" }}
+				b.Where(fmt.Sprintf("NOT n.%s IN %s", {{ $f.Constant }}, p))
+			{{- else if eq $code "Contains" }}
+				b.Where(fmt.Sprintf("n.%s CONTAINS %s", {{ $f.Constant }}, p))
+			{{- else if eq $code "StartsWith" }}
+				b.Where(fmt.Sprintf("n.%s STARTS WITH %s", {{ $f.Constant }}, p))
+			{{- else if eq $code "EndsWith" }}
+				b.Where(fmt.Sprintf("n.%s ENDS WITH %s", {{ $f.Constant }}, p))
+			{{- else if eq $code "EqualFold" }}
+				b.Where(fmt.Sprintf("toLower(n.%s) = toLower(%s)", {{ $f.Constant }}, p))
+			{{- else if eq $code "ContainsFold" }}
+				b.Where(fmt.Sprintf("toLower(n.%s) CONTAINS toLower(%s)", {{ $f.Constant }}, p))
+			{{- end }}
+		{{- end }}
+	}
+{{- end }}
+
+{{ define "dialect/neo4j/predicate/edge/has" -}}
+	{{- $e := $.Scope.Edge -}}
+	{{- $label := $e.LabelConstant -}}
+	{{- if $e.IsInverse -}}
+		{{- $label = $e.InverseLabelConstant -}}
+	{{- end -}}
+	func(b *cypher.Builder) {
+		{{- if $e.Bidi }}
+			b.Where(fmt.Sprintf("EXISTS { (n)-[:%s]-() }", {{ $label }}))
+		{{- else if $e.IsInverse }}
+			b.Where(fmt.Sprintf("EXISTS { (n)<-[:%s]-() }", {{ $label }}))
+		{{- else }}
+			b.Where(fmt.Sprintf("EXISTS { (n)-[:%s]->() }", {{ $label }}))
+		{{- end }}
+	}
+{{- end }}
+
+{{ define "dialect/neo4j/predicate/edge/haswith" -}}
+	{{- $e := $.Scope.Edge -}}
+	{{- $label := $e.LabelConstant -}}
+	{{- if $e.IsInverse -}}
+		{{- $label = $e.InverseLabelConstant -}}
+	{{- end -}}
+	func(b *cypher.Builder) {
+		sub := cypher.New()
+		{{- if $e.Bidi }}
+			sub.Match(fmt.Sprintf("(n)-[:%s]-(m:%s)", {{ $label }}, {{ $e.Type.Package }}.Label))
+		{{- else if $e.IsInverse }}
+			sub.Match(fmt.Sprintf("(n)<-[:%s]-(m:%s)", {{ $label }}, {{ $e.Type.Package }}.Label))
+		{{- else }}
+			sub.Match(fmt.Sprintf("(n)-[:%s]->(m:%s)", {{ $label }}, {{ $e.Type.Package }}.Label))
+		{{- end }}
+		for _, p := range preds {
+			p(sub)
+		}
+		query, params := sub.Query()
+		for k, v := range params {
+			b.SetParam(k, v)
+		}
+		b.Where(fmt.Sprintf("EXISTS { %s }", query))
+	}
+{{- end }}
+
+{{ define "dialect/neo4j/predicate/and" -}}
+	func(b *cypher.Builder) {
+		conds := make([]string, 0, len(predicates))
+		for _, pred := range predicates {
+			conds = append(conds, b.CollectWhere(pred)...)
+		}
+		b.Where(fmt.Sprintf("(%s)", strings.Join(conds, " AND ")))
+	}
+{{- end }}
+
+{{ define "dialect/neo4j/predicate/or" -}}
+	func(b *cypher.Builder) {
+		conds := make([]string, 0, len(predicates))
+		for _, pred := range predicates {
+			conds = append(conds, b.CollectWhere(pred)...)
+		}
+		b.Where(fmt.Sprintf("(%s)", strings.Join(conds, " OR ")))
+	}
+{{- end }}
+
+{{ define "dialect/neo4j/predicate/not" -}}
+	func(b *cypher.Builder) {
+		conds := b.CollectWhere(p)
+		b.Where(fmt.Sprintf("NOT (%s)", strings.Join(conds, " AND ")))
+	}
+{{- end }}

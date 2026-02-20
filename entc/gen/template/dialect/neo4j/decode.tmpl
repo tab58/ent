@@ -1,0 +1,119 @@
+{{/*
+Copyright 2019-present Facebook Inc. All rights reserved.
+This source code is licensed under the Apache 2.0 license found
+in the LICENSE file in the root directory of this source tree.
+*/}}
+
+{{/* gotype: entgo.io/ent/entc/gen.Type */}}
+
+{{ define "dialect/neo4j/decode/one" }}
+{{ $receiver := $.Receiver }}
+
+// FromResponse scans the neo4j response data into {{ $.Name }}.
+func ({{ $receiver }} *{{ $.Name }}) FromResponse(res *neo4j.Response) error {
+	m, err := res.ReadSingle()
+	if err != nil {
+		return err
+	}
+	{{- /* decode id */}}
+	if v, ok := m["id"]; ok {
+		id, ok := v.({{ $.ID.Type }})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field id", v)
+		}
+		{{ $receiver }}.ID = id
+	}
+	{{- range $f := $.Fields }}
+		if v, ok := m[{{ $f.StorageKey | quote }}]; ok {
+			{{- if and $f.IsTime (not $f.HasGoType) }}
+				{{- if $f.Nillable }}
+					t, ok := v.(int64)
+					if !ok {
+						return fmt.Errorf("unexpected type %T for field {{ $f.Name }}", v)
+					}
+					tv := time.Unix(0, t)
+					{{ $receiver }}.{{ $f.StructField }} = &tv
+				{{- else }}
+					t, ok := v.(int64)
+					if !ok {
+						return fmt.Errorf("unexpected type %T for field {{ $f.Name }}", v)
+					}
+					{{ $receiver }}.{{ $f.StructField }} = time.Unix(0, t)
+				{{- end }}
+			{{- else if $f.IsInt }}
+				{{- /* Neo4j returns int64 for all integers — handle conversion. */}}
+				n, ok := v.(int64)
+				if !ok {
+					return fmt.Errorf("unexpected type %T for field {{ $f.Name }}", v)
+				}
+				{{ $receiver }}.{{ $f.StructField }} = {{ if $f.NillableValue }}func() *{{ $f.Type }} { val := {{ $f.Type }}(n); return &val }(){{ else }}{{ $f.Type }}(n){{ end }}
+			{{- else }}
+				val, ok := v.({{ if $f.NillableValue }}*{{ end }}{{ $f.Type }})
+				if !ok {
+					return fmt.Errorf("unexpected type %T for field {{ $f.Name }}", v)
+				}
+				{{ $receiver }}.{{ $f.StructField }} = val
+			{{- end }}
+		}
+	{{- end }}
+	return nil
+}
+{{ end }}
+
+{{ define "dialect/neo4j/decode/many" }}
+{{ $receiver := $.Receiver }}
+{{ $slice := $.Scope.Slice }}
+
+// FromResponse scans the neo4j response data into {{ $slice }}.
+func ({{ $receiver }} *{{ $slice }}) FromResponse(res *neo4j.Response) error {
+	maps, err := res.ReadNodeMaps()
+	if err != nil {
+		return err
+	}
+	for _, m := range maps {
+		node := &{{ $.Name }}{}
+		{{- /* decode id */}}
+		if v, ok := m["id"]; ok {
+			id, ok := v.({{ $.ID.Type }})
+			if !ok {
+				return fmt.Errorf("unexpected type %T for field id", v)
+			}
+			node.ID = id
+		}
+		{{- range $f := $.Fields }}
+			if v, ok := m[{{ $f.StorageKey | quote }}]; ok {
+				{{- if and $f.IsTime (not $f.HasGoType) }}
+					{{- if $f.Nillable }}
+						t, ok := v.(int64)
+						if !ok {
+							return fmt.Errorf("unexpected type %T for field {{ $f.Name }}", v)
+						}
+						tv := time.Unix(0, t)
+						node.{{ $f.StructField }} = &tv
+					{{- else }}
+						t, ok := v.(int64)
+						if !ok {
+							return fmt.Errorf("unexpected type %T for field {{ $f.Name }}", v)
+						}
+						node.{{ $f.StructField }} = time.Unix(0, t)
+					{{- end }}
+				{{- else if $f.IsInt }}
+					n, ok := v.(int64)
+					if !ok {
+						return fmt.Errorf("unexpected type %T for field {{ $f.Name }}", v)
+					}
+					node.{{ $f.StructField }} = {{ if $f.NillableValue }}func() *{{ $f.Type }} { val := {{ $f.Type }}(n); return &val }(){{ else }}{{ $f.Type }}(n){{ end }}
+				{{- else }}
+					val, ok := v.({{ if $f.NillableValue }}*{{ end }}{{ $f.Type }})
+					if !ok {
+						return fmt.Errorf("unexpected type %T for field {{ $f.Name }}", v)
+					}
+					node.{{ $f.StructField }} = val
+				{{- end }}
+			}
+		{{- end }}
+		*{{ $receiver }} = append(*{{ $receiver }}, node)
+	}
+	return nil
+}
+{{ end }}

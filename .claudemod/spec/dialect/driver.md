@@ -37,10 +37,11 @@ type Tx interface {
   - `args` and `v` are `any` type, allowing each dialect to define conventions:
     - SQL: `args = []any`, `v = *sql.Rows | *sql.Result`
     - Gremlin: `args = dsl.Bindings (map)`, `v = *gremlin.Response`
+    - Neo4j: `args = map[string]any`, `v = *neo4j.Response`
   - Generated code type-asserts based on selected dialect.
 
 - **Dialect Constants**:
-  - `dialect.MySQL`, `dialect.SQLite`, `dialect.Postgres`, `dialect.Gremlin`
+  - `dialect.MySQL`, `dialect.SQLite`, `dialect.Postgres`, `dialect.Gremlin`, `dialect.Neo4j`
   - New dialects add constants here.
 
 - **Storage Registration** (`entc/gen/storage.go`):

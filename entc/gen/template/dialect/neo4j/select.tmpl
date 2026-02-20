@@ -1,0 +1,35 @@
+{{/*
+Copyright 2019-present Facebook Inc. All rights reserved.
+This source code is licensed under the Apache 2.0 license found
+in the LICENSE file in the root directory of this source tree.
+*/}}
+
+{{/* gotype: entgo.io/ent/entc/gen.typeScope */}}
+
+{{ define "dialect/neo4j/select" }}
+{{ $builder := pascal $.Scope.Builder }}
+{{ $receiver := $.Scope.Receiver }}
+
+func ({{ $receiver }} *{{ $builder }}) neo4jScan(ctx context.Context, root *{{ $.QueryName }}, v any) error {
+	res := &neo4j.Response{}
+	b := root.neo4jQuery(ctx)
+	if fields := {{ $receiver }}.ctx.Fields; len(fields) == 1 {
+		if fields[0] != {{ $.Package }}.FieldID {
+			b.Return(fmt.Sprintf("n.%s", fields[0]))
+		} else {
+			b.Return("n.id")
+		}
+	} else {
+		returnFields := make([]string, len({{ $receiver }}.ctx.Fields))
+		for i, f := range {{ $receiver }}.ctx.Fields {
+			returnFields[i] = fmt.Sprintf("n.%s", f)
+		}
+		b.Return(returnFields...)
+	}
+	query, params := b.Query()
+	if err := {{ $receiver }}.driver.Exec(ctx, query, params, res); err != nil {
+		return err
+	}
+	return res.Scan(v)
+}
+{{ end }}

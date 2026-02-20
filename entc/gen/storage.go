@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"entgo.io/ent/dialect/gremlin/graph/dsl"
+	"entgo.io/ent/dialect/neo4j/cypher"
 	"entgo.io/ent/dialect/sql"
 )
 
@@ -112,6 +113,19 @@ var drivers = []*Storage{
 		OpCode:     opCodes(gremlinCode[:]),
 		Init:       func(*Graph) error { return nil }, // Noop.
 	},
+	{
+		Name:      "neo4j",
+		IdentName: "Neo4j",
+		Builder:   reflect.TypeOf(&cypher.Builder{}),
+		Dialects:  []string{"dialect.Neo4j"},
+		Imports: []string{
+			"entgo.io/ent/dialect/neo4j",
+			"entgo.io/ent/dialect/neo4j/cypher",
+		},
+		SchemaMode: Unique | Indexes | Cascade,
+		OpCode:     opCodes(neo4jCode[:]),
+		Init:       func(*Graph) error { return nil }, // Noop.
+	},
 }
 
 // NewStorage returns the storage driver type from the given string.
@@ -144,6 +158,13 @@ var (
 		Contains:  "Containing",
 		HasPrefix: "StartingWith",
 		HasSuffix: "EndingWith",
+	}
+	// exceptional operation names in neo4j cypher.
+	neo4jCode = [...]string{
+		IsNil:     "IsNull",
+		NotNil:    "NotNull",
+		HasPrefix: "StartsWith",
+		HasSuffix: "EndsWith",
 	}
 )
 

@@ -12,7 +12,7 @@ ent is a Go entity framework that enables developers to define database schemas 
 
 - **Schema Definition API** (`schema/`): Builder-pattern API for defining entities, fields, edges, indexes, and mixins.
 - **Code Generation Engine** (`entc/`): Loads schemas, builds an entity graph, and executes Go templates to generate type-safe query builders and CRUD operations.
-- **Database Dialects** (`dialect/`): Pluggable backend support via the `dialect.Driver` interface. Currently supports SQL (MySQL, PostgreSQL, SQLite) and Gremlin (Apache TinkerPop).
+- **Database Dialects** (`dialect/`): Pluggable backend support via the `dialect.Driver` interface. Currently supports SQL (MySQL, PostgreSQL, SQLite), Gremlin (Apache TinkerPop), and Neo4j (Cypher).
 - **Query Language** (`entql/`): Dynamic query expression system for runtime predicate evaluation.
 - **Privacy Framework** (`privacy/`): Fine-grained access control with Allow/Deny/Skip decision model.
 - **CLI Tools** (`cmd/`): Command-line tools for schema management, code generation, and schema fixing.
@@ -51,6 +51,7 @@ ent is a Go entity framework that enables developers to define database schemas 
 - [./dialect/driver.md](Dialect Driver Interface)
 - [./dialect/sql.md](SQL Dialect)
 - [./dialect/gremlin.md](Gremlin Dialect)
+- [./dialect/neo4j.md](Neo4j Cypher Dialect)
 - [./query/entql.md](Query Language)
 - [./privacy/access-control.md](Privacy & Access Control)
 - [./cli/tools.md](CLI Tools)
