@@ -1,49 +1,24 @@
-# Specification: Gremlin Dialect
+# Specification: Gremlin Dialect (Reference)
 
-## 1. Goal
+## 1. Purpose
 
-Provide Apache TinkerPop-compatible graph database support through Gremlin traversal queries, enabling ent schemas to work with graph databases like JanusGraph and Amazon Neptune.
+Graph database backend using Apache TinkerPop Gremlin traversal language. The closest architectural precedent for the Neo4j dialect.
 
-## 2. User Stories
+## 2. Key Components
 
-- **As a developer**, I want ent to generate Gremlin traversals for my graph database.
-- **As a developer**, I want to connect via WebSocket or HTTP to a Gremlin server.
+- `dialect/gremlin/` — Gremlin driver (HTTP/WebSocket), DSL traversal builder
+- `dialect/gremlin/graph/dsl/` — Gremlin DSL: `Traversal`, `__` (anonymous traversals), `g` (graph source), `p` (predicates)
+- `entc/gen/template/dialect/gremlin/` — Gremlin-specific code generation templates
 
-## 3. Technical Requirements
+## 3. Relevance to Neo4j
 
-- **Driver** (`dialect/gremlin/driver.go`, ~59 lines):
-  - Wraps Gremlin `Client`.
-  - `Exec()` and `Query()` both send Gremlin traversal queries.
-  - Args format: `dsl.Bindings` (map of variable bindings).
-  - Results format: `*gremlin.Response`.
+Neo4j was modeled after Gremlin:
+- Same template definition set (verified by `TestNeo4jTemplateParity`)
+- Same SchemaMode flags (Unique only for Gremlin; Unique|Indexes|Cascade for Neo4j)
+- Similar graph-first data model (nodes + edges vs. tables + joins)
+- ID strategy: string-based (Gremlin uses server-assigned; Neo4j uses KSUID)
 
-- **Client** (`dialect/gremlin/`):
-  - `Transport` interface for HTTP and WebSocket.
-  - GraphSON encoding/decoding (`encoding/graphson/`).
-  - WebSocket connection management (`internal/ws/`).
+## 4. Dependencies
 
-- **DSL** (`dialect/gremlin/graph/dsl/`):
-  - Traversal builder: `g.V()`, `g.E()`.
-  - Filter predicates: `.Has()`, `.HasLabel()`, `.HasNot()`.
-  - Traversal steps: `.Out()`, `.In()`, `.Both()`, `.Values()`.
-  - Compiles to Groovy scripts with variable bindings.
-
-- **SchemaMode**: `Unique` only (no Indexes, Cascade, or Migrate support).
-
-- **Templates** (`entc/gen/template/dialect/gremlin/`, 13 templates):
-  - Generate Gremlin traversal code instead of SQL.
-  - Result parsing from GraphSON format.
-
-## 4. Acceptance Criteria
-
-- **Scenario**: Query users with Gremlin
-  - **Given** a User entity with Gremlin storage
-  - **When** `client.User.Query().Where(user.NameEQ("alice")).All(ctx)` is called
-  - **Then** a Gremlin traversal is executed against the graph database.
-
-## 5. Edge Cases
-
-- GraphSON v1/v2/v3 compatibility.
-- WebSocket reconnection on connection loss.
-- Gremlin servers with different property graph models.
-- No migration support - schema must be pre-configured.
+- **Depends on:** `entgo.io/ent/dialect/gremlin/encoding/graphson`
+- **Depended on by:** Generated Gremlin client code

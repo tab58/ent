@@ -1,41 +1,21 @@
-# Specification: Query Language (EntQL)
+# Specification: EntQL Query Language
 
-## 1. Goal
+## 1. Purpose
 
-Provide a dynamic query expression system for runtime predicate evaluation, enabling type-safe filtering across all entity types independent of the underlying dialect.
+Provides a dialect-agnostic query language abstraction. EntQL predicates are translated to dialect-specific operations (SQL WHERE, Gremlin has/filter, Cypher WHERE) during code generation.
 
-## 2. User Stories
+## 2. Key Components
 
-- **As a developer**, I want to build dynamic queries at runtime using a type-safe expression API.
-- **As a framework maintainer**, I want a dialect-agnostic query representation that can be translated to SQL or Gremlin.
+- `entql/` — Query language types, operators, and predicate builders
 
-## 3. Technical Requirements
+## 3. Relationship to Neo4j
 
-- **Expression Types** (`entql/types.go`, ~50K lines):
-  - Operations: AND, OR, NOT, EQ, NEQ, GT, GTE, LT, LTE, IN, NOT_IN.
-  - Functions: HasPrefix, HasSuffix, Contains, ContainsFold, EqualFold.
-  - Null checks: IsNil, NotNil.
-  - Edge predicates: HasEdge, HasEdgeWith.
+EntQL predicates map to Neo4j OpCodes defined in `entc/gen/storage.go`:
+- `IsNil` -> `IsNull`, `NotNil` -> `NotNull`
+- `HasPrefix` -> `StartsWith`, `HasSuffix` -> `EndsWith`
+- Other operations use default names (EQ, NEQ, GT, LT, etc.)
 
-- **Operator System**:
-  - `Op` type for comparison operators.
-  - `Func` type for string/collection functions.
-  - `Expr` type for composed expressions.
+## 4. Dependencies
 
-- **Integration**:
-  - Used by privacy policies for dynamic rule evaluation.
-  - Used by generated `Where()` methods for predicate composition.
-  - Translated to dialect-specific predicates during query execution.
-
-## 4. Acceptance Criteria
-
-- **Scenario**: Dynamic predicate composition
-  - **Given** an EntQL expression `And(EQ("name", "alice"), GT("age", 18))`
-  - **When** translated to SQL
-  - **Then** produces `name = ? AND age > ?` with parameterized values.
-
-## 5. Edge Cases
-
-- Deeply nested boolean expressions.
-- Edge predicates across multiple relationship hops.
-- Null handling in composite predicates.
+- **Depends on:** Standard library
+- **Depended on by:** `entc/gen` (predicate template generation), privacy policies
