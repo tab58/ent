@@ -14,6 +14,7 @@ import (
 	"entgo.io/ent/dialect/gremlin/graph/dsl"
 	"entgo.io/ent/dialect/neo4j/cypher"
 	"entgo.io/ent/dialect/sql"
+	"entgo.io/ent/schema/field"
 )
 
 // A SchemaMode defines what type of schema feature a storage driver support.
@@ -124,7 +125,20 @@ var drivers = []*Storage{
 		},
 		SchemaMode: Unique | Indexes | Cascade,
 		OpCode:     opCodes(neo4jCode[:]),
-		Init:       func(*Graph) error { return nil }, // Noop.
+		Init: func(g *Graph) error {
+			if g == nil {
+				return nil
+			}
+			// Neo4j uses KSUID string IDs instead of auto-increment integers.
+			strType := &field.TypeInfo{Type: field.TypeString}
+			g.IDType = strType
+			for _, n := range g.Nodes {
+				if n.HasOneFieldID() {
+					n.ID.Type = strType
+				}
+			}
+			return nil
+		},
 	},
 }
 
