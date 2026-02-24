@@ -62,6 +62,9 @@ func (r *Response) ReadNodeMaps() ([]map[string]any, error) {
 	}
 	maps := make([]map[string]any, 0, len(r.records))
 	for _, rec := range r.records {
+		if len(rec.Values) == 0 {
+			return nil, errors.New("neo4j: record has no values")
+		}
 		m, ok := rec.Values[0].(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("neo4j: expected map[string]any, got %T", rec.Values[0])
@@ -75,6 +78,9 @@ func (r *Response) ReadNodeMaps() ([]map[string]any, error) {
 func (r *Response) ReadSingle() (map[string]any, error) {
 	if len(r.records) == 0 {
 		return nil, errors.New("neo4j: no records in response")
+	}
+	if len(r.records[0].Values) == 0 {
+		return nil, errors.New("neo4j: record has no values")
 	}
 	m, ok := r.records[0].Values[0].(map[string]any)
 	if !ok {
@@ -105,4 +111,30 @@ func (r *Response) Scan(v any) error {
 		return fmt.Errorf("neo4j: marshal response: %w", err)
 	}
 	return json.Unmarshal(data, v)
+}
+
+// DecodeJSONField decodes a raw value from Neo4j (typically []interface{})
+// into the target type via JSON round-trip. Used by generated FromResponse
+// methods for slice/JSON fields where the Neo4j driver returns []interface{}
+// instead of typed Go slices.
+//
+// Example usage in generated code:
+//
+//	if v, ok := m["vector"]; ok {
+//	    if err := neo4j.DecodeJSONField(v, &tc.Vector); err != nil {
+//	        return err
+//	    }
+//	}
+func DecodeJSONField(raw any, target any) error {
+	if raw == nil {
+		return nil
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("neo4j: marshal field: %w", err)
+	}
+	if err := json.Unmarshal(data, target); err != nil {
+		return fmt.Errorf("neo4j: unmarshal field: %w", err)
+	}
+	return nil
 }

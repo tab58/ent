@@ -388,6 +388,76 @@ func TestNeo4jSelectTemplate(t *testing.T) {
 	}
 }
 
+// --- L3: Contract completeness guard ---
+
+// TestNeo4jTemplateContract_Completeness verifies that the contract list
+// covers ALL Neo4j template definitions that exist in the template set.
+// If a new template is added in H3/H4 but not included in the contract,
+// this test will fail, prompting an update to neo4jTemplateContract.
+// Expected: every loaded "dialect/neo4j/*" template is in the contract list.
+func TestNeo4jTemplateContract_Completeness(t *testing.T) {
+	initTemplates()
+	// Get all Neo4j template definitions from the loaded template set.
+	neo4jTemplates := matchTemplate("dialect/neo4j/*", "dialect/neo4j/*/*", "dialect/neo4j/*/*/*")
+
+	// Build a set of contract names for fast lookup.
+	contractNames := make(map[string]bool, len(neo4jTemplateContract))
+	for _, tc := range neo4jTemplateContract {
+		contractNames[tc.name] = true
+	}
+
+	// Check that every loaded Neo4j template is in the contract.
+	for _, name := range neo4jTemplates {
+		if !contractNames[name] {
+			t.Errorf("template %q exists but is NOT in neo4jTemplateContract — update the contract list", name)
+		}
+	}
+}
+
+// TestNeo4jTemplateContract_NoStaleEntries verifies that no contract entries
+// reference templates that don't exist. If a template was renamed or removed,
+// this test catches stale contract entries.
+// Expected: every contract entry has a matching loaded template.
+func TestNeo4jTemplateContract_NoStaleEntries(t *testing.T) {
+	initTemplates()
+	for _, tc := range neo4jTemplateContract {
+		t.Run(tc.name, func(t *testing.T) {
+			if !hasTemplate(tc.name) {
+				t.Errorf("contract entry %q has no matching template — stale entry or missing template", tc.name)
+			}
+		})
+	}
+}
+
+// TestNeo4jTemplateContract_CountMatchesLoaded verifies that the number of
+// contract entries matches the number of loaded Neo4j templates.
+// A mismatch means either the contract has extra entries or templates were
+// added without contract updates.
+// Expected: len(contract) == len(loaded neo4j templates).
+func TestNeo4jTemplateContract_CountMatchesLoaded(t *testing.T) {
+	initTemplates()
+	neo4jTemplates := matchTemplate("dialect/neo4j/*", "dialect/neo4j/*/*", "dialect/neo4j/*/*/*")
+	contractCount := len(neo4jTemplateContract)
+	loadedCount := len(neo4jTemplates)
+
+	if contractCount != loadedCount {
+		t.Errorf("contract has %d entries but %d Neo4j templates are loaded — contract needs update",
+			contractCount, loadedCount)
+		if loadedCount > contractCount {
+			// List the missing templates for easy debugging.
+			contractNames := make(map[string]bool, contractCount)
+			for _, tc := range neo4jTemplateContract {
+				contractNames[tc.name] = true
+			}
+			for _, name := range neo4jTemplates {
+				if !contractNames[name] {
+					t.Logf("  missing from contract: %s", name)
+				}
+			}
+		}
+	}
+}
+
 // --- Code Generation Integration Test ---
 
 // TestNeo4jCodeGen_WithNeo4jStorage verifies that code generation with

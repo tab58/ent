@@ -120,11 +120,11 @@ in the LICENSE file in the root directory of this source tree.
 	func(b *cypher.Builder) {
 		sub := cypher.New()
 		{{- if $e.Bidi }}
-			sub.Match(fmt.Sprintf("(n)-[:%s]-(m:%s)", {{ $label }}, {{ $e.Type.Package }}.Label))
+			sub.Match(fmt.Sprintf("(n)-[:%s]-(m:%s)", {{ $label }}, {{ quote $e.Type.Label }}))
 		{{- else if $e.IsInverse }}
-			sub.Match(fmt.Sprintf("(n)<-[:%s]-(m:%s)", {{ $label }}, {{ $e.Type.Package }}.Label))
+			sub.Match(fmt.Sprintf("(n)<-[:%s]-(m:%s)", {{ $label }}, {{ quote $e.Type.Label }}))
 		{{- else }}
-			sub.Match(fmt.Sprintf("(n)-[:%s]->(m:%s)", {{ $label }}, {{ $e.Type.Package }}.Label))
+			sub.Match(fmt.Sprintf("(n)-[:%s]->(m:%s)", {{ $label }}, {{ quote $e.Type.Label }}))
 		{{- end }}
 		for _, p := range preds {
 			p(sub)
