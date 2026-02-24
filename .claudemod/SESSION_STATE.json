@@ -1,7 +1,6 @@
 {
-  "action": "complete",
-  "phase": "",
-  "discussion_summary": "",
-  "recommendation": "",
-  "explanation": ""
+  "action": "advance",
+  "phase": "bootstrap",
+  "discussion_summary": "Explored the ent codebase (Go entity framework + code generator) on the claudemod-neo4j branch. Generated 10 specs: 4 deep specs covering Neo4j driver, Cypher builder, codegen engine, and Neo4j templates; 6 lighter reference specs for core schema, CLI, EntQL, privacy, SQL dialect, and Gremlin dialect. Developer confirmed production-ready goal for Neo4j dialect.",
+  "recommendation": "Focus on closing Neo4j production gaps: real transaction support (replace NopTx), Cypher builder enhancements (WITH/UNWIND clauses), and integration tests against a live Neo4j instance. Template contract tests are solid — use them as the safety net for template changes."
 }

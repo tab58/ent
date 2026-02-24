@@ -1,60 +1,75 @@
 # Specification: Code Generation Engine
 
-## 1. Goal
+## 1. Purpose
 
-Load developer-defined schemas, build an in-memory entity graph, validate relationships, and generate type-safe Go packages with CRUD operations, query builders, and migrations.
+The core code generation pipeline that transforms user-defined Go schemas into a fully typed client. Parses schemas via AST, builds an in-memory graph model, registers storage drivers, executes dialect-specific templates, and writes formatted Go source files.
 
-## 2. User Stories
+## 2. Key Components
 
-- **As a developer**, I want to run `go generate ./ent` to regenerate all entity code after schema changes.
-- **As a developer**, I want generated code to be type-safe with compile-time guarantees.
-- **As a developer**, I want to extend generation with custom templates and extensions.
+- `entc/entc.go` — Public API: `Generate(schemaPath, cfg, opts...)`, `LoadGraph(schemaPath, cfg)`. Extension interface for third-party hooks, templates, and annotations.
+- `entc/load/` — Schema parser using `golang.org/x/tools/go/packages`. Produces `[]load.Schema` from user's schema package.
+- `entc/gen/graph.go` — `Graph` type: top-level container holding `Type` nodes, `Edge` connections, and generation config. `NewGraph(cfg, schemas...)` builds the graph; `Graph.Gen()` executes templates.
+- `entc/gen/type.go` — `Type` represents an entity with `Field`s, `Edge`s, `Index`es. Contains dialect-specific methods.
+- `entc/gen/storage.go` — `Storage` driver registration. Maps dialect name to builder type, imports, schema capabilities, and operation codes.
+- `entc/gen/template.go` — Template loading, parsing, and execution. Manages shared + dialect-specific template sets.
+- `entc/gen/func.go` — Template function map (`funcmap`): type converters, string utils, Go AST helpers.
 
-## 3. Technical Requirements
+## 3. Data Models
 
-- **Schema Loading** (`entc/load/`):
-  - Parse Go AST of schema package.
-  - Validate schema struct implementations.
-  - Extract Fields, Edges, Indexes, Hooks, Interceptors, Annotations.
-  - Build `SchemaSpec` from parsed definitions.
+- **Graph** — `{Nodes []*Type, Schemas []*load.Schema, Storage *Storage, Config *Config, Features []Feature}` — Top-level generation context.
+- **Type** — `{Name, Fields []*Field, Edges []*Edge, Indexes []*Index, Annotations map[string]any}` — Single entity type (e.g., User, Pet).
+- **Field** — `{Name, Type *field.TypeInfo, StorageKey, Validators, Default, Optional, Nillable, Immutable}` — Schema field with type info and constraints.
+- **Edge** — `{Name, Type *Type, Rel Rel, Inverse bool, Unique bool, Through *Type}` — Relationship between types (O2O, O2M, M2O, M2M).
+- **Storage** — `{Name, IdentName, Builder reflect.Type, Dialects []string, Imports []string, SchemaMode, OpCode func(Op) string, Init func(*Graph) error}` — Dialect driver configuration.
 
-- **Graph Building** (`entc/gen/graph.go`, ~1226 lines):
-  - Construct `*gen.Graph` representing all entities and their relationships.
-  - Validate edge references (no dangling edges).
-  - Detect cycles in required edges.
-  - Assign default field values and storage keys.
+## 4. Interfaces
 
-- **Storage Selection** (`entc/gen/storage.go`):
-  - Static array of `*Storage` structs (currently SQL and Gremlin).
-  - Selected via `entc.Storage(typ)` option or CLI flag.
-  - Controls which dialect-specific templates are used.
-  - `SchemaMode` bitmask controls feature availability (Unique, Indexes, Cascade, Migrate).
+- **Public API (`entc/entc.go`):**
+  - `Generate(schemaPath string, cfg *gen.Config, options ...Option) error`
+  - `LoadGraph(schemaPath string, cfg *gen.Config) (*gen.Graph, error)`
+- **Extension Interface:**
+  - `Hooks() []gen.Hook` — Pre/post generation hooks
+  - `Templates() []*gen.Template` — Additional templates
+  - `Annotations() []schema.Annotation` — Metadata injected into graph
+- **Storage Registration (`entc/gen/storage.go`):**
+  - `NewStorage(name string) (*Storage, error)` — Lookup by name
+  - `Storage.SchemaMode.Support(mode)` — Feature capability check
+  - `Storage.OpCode(op) string` — Dialect-specific operation name
+- **Template Execution:**
+  - `Graph.Gen()` — Execute all templates, write output files
+  - Templates call `{{ template "dialect/<name>/<op>" . }}` for dialect dispatch
 
-- **Template Execution** (`entc/gen/template/`):
-  - ~20 base templates for entity types, builders, client.
-  - Dialect-specific overrides in `template/dialect/{sql,gremlin}/`.
-  - Custom templates injectable via `entc.Extension`.
-  - Output formatted with `goimports`.
+## 5. Dependencies
 
-- **Feature Flags** (`entc/gen/feature.go`):
-  - Conditionally enable: Privacy, EntQL, GlobalID, Snapshot, SchemaConfig, Intercept.
-  - Features add implicit fields/edges and enable additional templates.
+- **Depends on:** `golang.org/x/tools/go/packages` (schema parsing), `text/template` (code generation), `golang.org/x/tools/imports` (goimports formatting)
+- **Depended on by:** CLI tools (`cmd/ent`), all dialect packages (via storage registration), Extensions
 
-## 4. Acceptance Criteria
+## 6. Acceptance Criteria
 
-- **Scenario**: Generate code for a User schema with SQL storage
-  - **Given** a valid User schema with fields and edges
-  - **When** `entc.Generate("./ent/schema")` is called
-  - **Then** type-safe Go files are generated: `user.go`, `user_create.go`, `user_update.go`, `user_delete.go`, `user_query.go`, `client.go`, `migrate/`.
+- `NewGraph` builds correct `Type` nodes from `load.Schema` with all fields, edges, and indexes resolved
+- Storage driver lookup by name returns correct `*Storage` for "sql", "gremlin", "neo4j"
+- Neo4j storage registers: `Builder=*cypher.Builder`, `SchemaMode=Unique|Indexes|Cascade`, imports include `neo4j` and `neo4j/cypher`
+- Template execution produces valid Go source for each dialect
+- Generated files pass `goimports` formatting
+- Extension hooks execute at correct lifecycle points
 
-- **Scenario**: Add a new storage driver
-  - **Given** a new `*Storage` entry in `storage.go`
-  - **When** the driver is selected via config
-  - **Then** dialect-specific templates are used for code generation.
+## 7. Edge Cases
 
-## 5. Edge Cases
+- Unknown storage driver name -> `"entc/gen: invalid storage driver"` error
+- Schema with circular edge references -> resolved during graph building
+- Schema with no fields (edges only) -> valid generated code
+- SQL-specific features (Migrate) not available in Neo4j SchemaMode
 
-- Schema loading fails on invalid Go syntax.
-- Circular required edges cause generation error.
-- Missing edge inverse references detected and reported.
-- Large schemas (100+ entities) must generate efficiently.
+## 8. Neo4j-Specific Storage Configuration
+
+```go
+Storage{
+  Name:       "neo4j",
+  IdentName:  "Neo4j",
+  Builder:    reflect.TypeOf(&cypher.Builder{}),
+  Dialects:   []string{"dialect.Neo4j"},
+  Imports:    ["entgo.io/ent/dialect/neo4j", "entgo.io/ent/dialect/neo4j/cypher"],
+  SchemaMode: Unique | Indexes | Cascade,  // No Migrate
+  OpCode:     {IsNil: "IsNull", NotNil: "NotNull", HasPrefix: "StartsWith", HasSuffix: "EndsWith"},
+}
+```

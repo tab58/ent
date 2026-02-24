@@ -1,44 +1,22 @@
 # Specification: CLI Tools
 
-## 1. Goal
+## 1. Purpose
 
-Provide command-line tools for schema initialization, code generation, and schema maintenance.
+Command-line interface for ent code generation. Provides `init`, `generate`, and `describe` commands via cobra.
 
-## 2. User Stories
+## 2. Key Components
 
-- **As a developer**, I want to initialize a new ent project with `ent init`.
-- **As a developer**, I want to generate entity code with `ent generate`.
-- **As a developer**, I want to fix/migrate schemas with `entfix`.
+- `cmd/ent/ent.go` — Primary CLI entry point (recommended)
+- `cmd/entc/entc.go` — Legacy CLI (older, fewer features)
+- `cmd/entfix/` — Migration/fix utilities for schema upgrades
 
-## 3. Technical Requirements
+## 3. Commands
 
-- **ent CLI** (`cmd/ent/`):
-  - `ent init <Name>` - Create new schema file.
-  - `ent generate ./ent/schema` - Run code generation.
-  - `ent describe ./ent/schema` - Show schema information.
-  - Built with Cobra CLI framework.
+- `ent init <TypeName>` — Scaffold a new schema file
+- `ent generate ./ent/schema` — Run code generation
+- `ent describe ./ent/schema` — Print schema description
 
-- **entc CLI** (`cmd/entc/`):
-  - Standalone code generation executable.
-  - Same generation engine as `ent generate`.
+## 4. Dependencies
 
-- **entfix CLI** (`cmd/entfix/`):
-  - Schema migration/fixing utility.
-  - Handles schema format updates between ent versions.
-
-- **Internal** (`cmd/internal/`):
-  - Shared base commands.
-  - Printer utilities for formatted output.
-
-## 4. Acceptance Criteria
-
-- **Scenario**: Initialize a new schema
-  - **Given** a developer runs `ent init User`
-  - **When** the command completes
-  - **Then** a `User` schema file is created in `ent/schema/user.go`.
-
-## 5. Edge Cases
-
-- Running generate with no schemas present.
-- Conflicting schema names.
-- Invalid Go syntax in schema files detected at generation time.
+- **Depends on:** `entc/entc.go` (Generate, LoadGraph), `github.com/spf13/cobra`
+- **Depended on by:** User workflows, CI pipelines
