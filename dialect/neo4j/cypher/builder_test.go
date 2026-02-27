@@ -571,3 +571,78 @@ func TestBuilder_MultipleOrderBy(t *testing.T) {
 		t.Errorf("Query() = %q, want %q", got, want)
 	}
 }
+
+// --- Tests for previously broken scenarios ---
+
+func TestBuilder_OptionalMatchNoPrefix(t *testing.T) {
+	// OPTIONAL MATCH must be emitted without a redundant "MATCH " prefix.
+	b := New()
+	b.Match("OPTIONAL MATCH (existing:User {email: $p0})")
+	b.Where("existing IS NULL")
+	b.Create("(n:User {id: $p1})")
+	b.Return("n {.*}")
+
+	got, _ := b.Query()
+	want := "OPTIONAL MATCH (existing:User {email: $p0}) WHERE existing IS NULL CREATE (n:User {id: $p1}) RETURN n {.*}"
+	if got != want {
+		t.Errorf("Query() = %q, want %q", got, want)
+	}
+}
+
+func TestBuilder_WithMatchNoPrefix(t *testing.T) {
+	// "WITH n MATCH ..." must be emitted without a redundant "MATCH " prefix.
+	b := New()
+	b.Match("(n:User)")
+	b.Where("n.id = $p0")
+	b.Match("WITH n MATCH (m:Pet) WHERE m.id = $p1")
+	b.Create("(n)-[:USER_HAS_PET]->(m)")
+	b.Return("n {.*}")
+
+	got, _ := b.Query()
+	want := "MATCH (n:User) WHERE n.id = $p0 WITH n MATCH (m:Pet) WHERE m.id = $p1 CREATE (n)-[:USER_HAS_PET]->(m) RETURN n {.*}"
+	if got != want {
+		t.Errorf("Query() = %q, want %q", got, want)
+	}
+}
+
+func TestBuilder_CreateWithEdgeInterleaving(t *testing.T) {
+	// Multiple edges after CREATE must preserve insertion order:
+	// CREATE node → WITH n MATCH target1 → CREATE edge1 → WITH n MATCH target2 → CREATE edge2.
+	b := New()
+	b.Create("(n:Business {id: $p0, name: $p1})")
+	b.Match("WITH n MATCH (m1:Document) WHERE m1.id = $p2")
+	b.Create("(n)-[:BUSINESS_HAS_DOCUMENT]->(m1)")
+	b.Match("WITH n MATCH (m2:Category) WHERE m2.id = $p3")
+	b.Create("(n)-[:BUSINESS_HAS_CATEGORY]->(m2)")
+	b.Return("n {.*}")
+
+	got, _ := b.Query()
+	want := "CREATE (n:Business {id: $p0, name: $p1}) " +
+		"WITH n MATCH (m1:Document) WHERE m1.id = $p2 " +
+		"CREATE (n)-[:BUSINESS_HAS_DOCUMENT]->(m1) " +
+		"WITH n MATCH (m2:Category) WHERE m2.id = $p3 " +
+		"CREATE (n)-[:BUSINESS_HAS_CATEGORY]->(m2) " +
+		"RETURN n {.*}"
+	if got != want {
+		t.Errorf("Query() = %q\nwant  = %q", got, want)
+	}
+}
+
+func TestBuilder_WithOptionalMatch(t *testing.T) {
+	// Update edge clearing: MATCH head, then WITH n OPTIONAL MATCH + DELETE.
+	b := New()
+	b.Match("(n:Business)")
+	b.Where("n.id = $p0")
+	b.Set("n.name = $p1")
+	b.Match("WITH n OPTIONAL MATCH (n)-[r:BUSINESS_HAS_DOCUMENT]->()")
+	b.Delete("r")
+	b.Return("n {.*}")
+
+	got, _ := b.Query()
+	want := "MATCH (n:Business) WHERE n.id = $p0 SET n.name = $p1 " +
+		"WITH n OPTIONAL MATCH (n)-[r:BUSINESS_HAS_DOCUMENT]->() " +
+		"DELETE r RETURN n {.*}"
+	if got != want {
+		t.Errorf("Query() = %q\nwant  = %q", got, want)
+	}
+}
