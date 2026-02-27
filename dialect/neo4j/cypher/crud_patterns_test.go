@@ -5,7 +5,6 @@
 package cypher
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -60,18 +59,10 @@ func TestCRUD_CreateWithUniquenessGuard(t *testing.T) {
 	b.Return("n {.*}")
 
 	query, _ := b.Query()
-	// Verify key patterns exist in the query.
-	if !strings.Contains(query, "OPTIONAL MATCH") {
-		t.Error("query should contain OPTIONAL MATCH for uniqueness guard")
-	}
-	if !strings.Contains(query, "existing IS NULL") {
-		t.Error("query should contain 'existing IS NULL' check")
-	}
-	if !strings.Contains(query, "CREATE (n:Business") {
-		t.Error("query should contain CREATE with Business label")
-	}
-	if !strings.Contains(query, "RETURN n {.*}") {
-		t.Error("query should contain RETURN n {.*}")
+	// Exact assertion: OPTIONAL MATCH must NOT get a redundant "MATCH " prefix.
+	wantQuery := "OPTIONAL MATCH (existing:Business {name: $p0}) WHERE existing IS NULL CREATE (n:Business {id: $p1, name: $p0}) RETURN n {.*}"
+	if query != wantQuery {
+		t.Errorf("query = %q\nwant  = %q", query, wantQuery)
 	}
 }
 
@@ -331,14 +322,11 @@ func TestCRUD_CreateWithEdge(t *testing.T) {
 	b.Return("n {.*}")
 
 	query, params := b.Query()
-	if !strings.Contains(query, "CREATE (n:Business") {
-		t.Error("query should contain CREATE (n:Business ...)")
-	}
-	if !strings.Contains(query, "BUSINESS_HAS_DOCUMENT") {
-		t.Error("query should contain BUSINESS_HAS_DOCUMENT relationship type")
-	}
-	if !strings.Contains(query, "RETURN n {.*}") {
-		t.Error("query should end with RETURN n {.*}")
+	// Exact assertion: CREATE node, then WITH n MATCH target, then CREATE edge.
+	// The "WITH n MATCH" clause must NOT get a redundant "MATCH " prefix.
+	wantQuery := "CREATE (n:Business {id: $p0, name: $p1}) WITH n MATCH (m:Document) WHERE m.id = $p2 CREATE (n)-[:BUSINESS_HAS_DOCUMENT]->(m) RETURN n {.*}"
+	if query != wantQuery {
+		t.Errorf("query = %q\nwant  = %q", query, wantQuery)
 	}
 	if params["p2"] != "ksuid-doc" {
 		t.Errorf("params[p2] = %v, want ksuid-doc", params["p2"])

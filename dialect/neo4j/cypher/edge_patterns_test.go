@@ -150,11 +150,13 @@ func TestEdgeTraversal_EdgeCreation(t *testing.T) {
 			b.Return("n {.*}")
 
 			query, _ := b.Query()
-			if !strings.Contains(query, edge.relType) {
-				t.Errorf("query missing relationship type %q", edge.relType)
-			}
-			if !strings.Contains(query, "CREATE (n)-[:"+edge.relType+"]->(m)") {
-				t.Errorf("query missing CREATE pattern for %q", edge.relType)
+			// Exact assertion: MATCH head, WHERE, then interleaved WITH n MATCH + CREATE.
+			wantQuery := fmt.Sprintf(
+				"MATCH (n:%s) WHERE n.id = $p0 WITH n MATCH (m:%s) WHERE m.id = $p1 CREATE (n)-[:%s]->(m) RETURN n {.*}",
+				edge.sourceLabel, edge.targetLabel, edge.relType,
+			)
+			if query != wantQuery {
+				t.Errorf("query = %q\nwant  = %q", query, wantQuery)
 			}
 		})
 	}
@@ -180,11 +182,13 @@ func TestEdgeTraversal_EdgeDeletion(t *testing.T) {
 			b.Return("count(r)")
 
 			query, _ := b.Query()
-			if !strings.Contains(query, "DELETE r") {
-				t.Errorf("query missing DELETE r")
-			}
-			if !strings.Contains(query, edge.relType) {
-				t.Errorf("query missing relationship type %q", edge.relType)
+			// Exact assertion: MATCH head, WHERE, then interleaved WITH n MATCH + DELETE.
+			wantQuery := fmt.Sprintf(
+				"MATCH (n:%s) WHERE n.id = $p0 WITH n MATCH (n)-[r:%s]->(m) WHERE m.id = $p1 DELETE r RETURN count(r)",
+				edge.sourceLabel, edge.relType,
+			)
+			if query != wantQuery {
+				t.Errorf("query = %q\nwant  = %q", query, wantQuery)
 			}
 		})
 	}
