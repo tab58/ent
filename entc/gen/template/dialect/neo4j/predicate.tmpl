@@ -27,7 +27,24 @@ in the LICENSE file in the root directory of this source tree.
 		{{- else }}
 			p := b.AddParam({{ $arg }})
 		{{- end }}
-		b.Where(fmt.Sprintf("n.id %s %s", {{ quote (call $storage.OpCode $op) }}, p))
+		{{- $code := call $storage.OpCode $op }}
+		{{- if eq $code "EQ" }}
+			b.Where(fmt.Sprintf("n.id = %s", p))
+		{{- else if eq $code "NEQ" }}
+			b.Where(fmt.Sprintf("n.id <> %s", p))
+		{{- else if eq $code "GT" }}
+			b.Where(fmt.Sprintf("n.id > %s", p))
+		{{- else if eq $code "GTE" }}
+			b.Where(fmt.Sprintf("n.id >= %s", p))
+		{{- else if eq $code "LT" }}
+			b.Where(fmt.Sprintf("n.id < %s", p))
+		{{- else if eq $code "LTE" }}
+			b.Where(fmt.Sprintf("n.id <= %s", p))
+		{{- else if eq $code "In" }}
+			b.Where(fmt.Sprintf("n.id IN %s", p))
+		{{- else if eq $code "NotIn" }}
+			b.Where(fmt.Sprintf("NOT n.id IN %s", p))
+		{{- end }}
 	}
 {{- end }}
 
