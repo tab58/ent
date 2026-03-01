@@ -632,6 +632,102 @@ func TestMegatronNeo4j_NonJSONFieldsStillUseDirectAssertion(t *testing.T) {
 	}
 }
 
+// --- Regression: id/ops template must emit Cypher operators, not Go OpCode names ---
+//
+// The dialect/neo4j/predicate/id/ops template must map each Go OpCode
+// (EQ, NEQ, GT, etc.) to its Cypher equivalent (=, <>, >, etc.).
+// A previous bug passed the raw OpCode string into the generated code,
+// producing invalid Cypher like "n.id EQ $p0" instead of "n.id = $p0".
+
+// TestMegatronNeo4j_IDPredicatesNoRawOpCodes verifies that the generated
+// where.go files do NOT contain raw Go OpCode strings in ID predicates.
+// These strings indicate the id/ops template is passing OpCode names
+// directly instead of mapping them to Cypher operators.
+//
+// Must pass: no where.go contains "EQ", "NEQ", "GT", "GTE", "LT", "LTE"
+// as standalone operator strings in ID predicate functions.
+// If this fails, the id/ops template has regressed to passing raw OpCodes.
+func TestMegatronNeo4j_IDPredicatesNoRawOpCodes(t *testing.T) {
+	g, target := neo4jGraph(t)
+	if err := g.Gen(); err != nil {
+		t.Fatalf("Graph.Gen() error = %v", err)
+	}
+	entityDirs := []string{
+		"business", "document", "category",
+		"year", "table", "tablecell",
+	}
+	// These patterns represent raw Go OpCode strings being passed into
+	// fmt.Sprintf as the operator — the exact bug we're guarding against.
+	// The format in generated code is: fmt.Sprintf("n.id %s %s", "EQ", p)
+	forbiddenPatterns := []struct {
+		pattern     string
+		description string
+	}{
+		{`"EQ"`, "raw EQ OpCode instead of Cypher ="},
+		{`"NEQ"`, "raw NEQ OpCode instead of Cypher <>"},
+		{`"GT"`, "raw GT OpCode instead of Cypher >"},
+		{`"GTE"`, "raw GTE OpCode instead of Cypher >="},
+		{`"LT"`, "raw LT OpCode instead of Cypher <"},
+		{`"LTE"`, "raw LTE OpCode instead of Cypher <="},
+	}
+	for _, dir := range entityDirs {
+		wherePath := filepath.Join(target, dir, "where.go")
+		data, err := os.ReadFile(wherePath)
+		if err != nil {
+			t.Errorf("ReadFile(%s/where.go) error = %v", dir, err)
+			continue
+		}
+		content := string(data)
+		for _, fp := range forbiddenPatterns {
+			if strings.Contains(content, fp.pattern) {
+				t.Errorf("%s/where.go contains %s — %s",
+					dir, fp.pattern, fp.description)
+			}
+		}
+	}
+}
+
+// TestMegatronNeo4j_IDPredicatesCypherOperators verifies that the generated
+// where.go files use correct Cypher operators in ID predicate functions.
+// Each ID comparison predicate (IDEQ, IDNEQ, IDGT, etc.) should produce
+// a Where clause with the proper Cypher operator.
+//
+// Must pass: where.go files contain Cypher operators for ID predicates.
+// If this fails, the id/ops template is not emitting proper Cypher syntax.
+func TestMegatronNeo4j_IDPredicatesCypherOperators(t *testing.T) {
+	g, target := neo4jGraph(t)
+	if err := g.Gen(); err != nil {
+		t.Fatalf("Graph.Gen() error = %v", err)
+	}
+	// Check one representative entity's where.go for all expected operators.
+	wherePath := filepath.Join(target, "business", "where.go")
+	data, err := os.ReadFile(wherePath)
+	if err != nil {
+		t.Fatalf("ReadFile(business/where.go) error = %v", err)
+	}
+	content := string(data)
+
+	// Each ID predicate must produce the correct Cypher operator.
+	expectedPatterns := []struct {
+		cypherOp    string
+		description string
+	}{
+		{`"n.id = %s"`, "IDEQ should use Cypher = operator"},
+		{`"n.id <> %s"`, "IDNEQ should use Cypher <> operator"},
+		{`"n.id > %s"`, "IDGT should use Cypher > operator"},
+		{`"n.id >= %s"`, "IDGTE should use Cypher >= operator"},
+		{`"n.id < %s"`, "IDLT should use Cypher < operator"},
+		{`"n.id <= %s"`, "IDLTE should use Cypher <= operator"},
+		{`"n.id IN %s"`, "IDIn should use Cypher IN operator"},
+		{`"NOT n.id IN %s"`, "IDNotIn should use Cypher NOT IN operator"},
+	}
+	for _, ep := range expectedPatterns {
+		if !strings.Contains(content, ep.cypherOp) {
+			t.Errorf("business/where.go missing %s — %s", ep.cypherOp, ep.description)
+		}
+	}
+}
+
 // testBuildCmd returns an *exec.Cmd for running 'go build' in the given dir.
 func testBuildCmd(dir string) *exec.Cmd {
 	cmd := exec.Command("go", "build", "./...")
