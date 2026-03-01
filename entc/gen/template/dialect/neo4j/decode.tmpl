@@ -47,6 +47,11 @@ func ({{ $receiver }} *{{ $.Name }}) FromResponse(res *neo4j.Response) error {
 					return fmt.Errorf("unexpected type %T for field {{ $f.Name }}", v)
 				}
 				{{ $receiver }}.{{ $f.StructField }} = {{ if $f.NillableValue }}func() *{{ $f.Type }} { val := {{ $f.Type }}(n); return &val }(){{ else }}{{ $f.Type }}(n){{ end }}
+			{{- else if $f.IsJSON }}
+				{{- /* Neo4j returns []interface{} for slices — use DecodeJSONField for safe conversion. */}}
+				if err := neo4j.DecodeJSONField(v, &{{ $receiver }}.{{ $f.StructField }}); err != nil {
+					return err
+				}
 			{{- else }}
 				val, ok := v.({{ if $f.NillableValue }}*{{ end }}{{ $f.Type }})
 				if !ok {
@@ -103,6 +108,11 @@ func ({{ $receiver }} *{{ $slice }}) FromResponse(res *neo4j.Response) error {
 						return fmt.Errorf("unexpected type %T for field {{ $f.Name }}", v)
 					}
 					node.{{ $f.StructField }} = {{ if $f.NillableValue }}func() *{{ $f.Type }} { val := {{ $f.Type }}(n); return &val }(){{ else }}{{ $f.Type }}(n){{ end }}
+				{{- else if $f.IsJSON }}
+					{{- /* Neo4j returns []interface{} for slices — use DecodeJSONField for safe conversion. */}}
+					if err := neo4j.DecodeJSONField(v, &node.{{ $f.StructField }}); err != nil {
+						return err
+					}
 				{{- else }}
 					val, ok := v.({{ if $f.NillableValue }}*{{ end }}{{ $f.Type }})
 					if !ok {

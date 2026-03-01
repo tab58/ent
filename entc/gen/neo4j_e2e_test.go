@@ -530,6 +530,108 @@ func TestMegatronNeo4j_QueryByIDUsesStringParam(t *testing.T) {
 	}
 }
 
+// --- Regression: decode template must use DecodeJSONField for JSON fields ---
+//
+// These tests prevent the decode template from regressing to direct type
+// assertions (v.([]float64), v.([]string)) for JSON/slice fields. The Neo4j
+// driver returns these as []interface{}, so direct assertion panics at runtime.
+
+// TestMegatronNeo4j_DecodeUsesDecodeJSONField verifies that the generated
+// tablecell.go file uses neo4j.DecodeJSONField for the vector and categories
+// fields (both TypeJSON). This is the codegen-level regression test.
+//
+// Must pass: generated code contains DecodeJSONField calls for JSON fields.
+// If this fails, the decode template has regressed to direct type assertions.
+func TestMegatronNeo4j_DecodeUsesDecodeJSONField(t *testing.T) {
+	g, target := neo4jGraph(t)
+	if err := g.Gen(); err != nil {
+		t.Fatalf("Graph.Gen() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(target, "tablecell.go"))
+	if err != nil {
+		t.Fatalf("ReadFile(tablecell.go) error = %v", err)
+	}
+	content := string(data)
+
+	// Both JSON fields must use DecodeJSONField in the generated decode code.
+	jsonFields := []string{"Vector", "Categories"}
+	for _, field := range jsonFields {
+		pattern := "DecodeJSONField(v, &"
+		if !strings.Contains(content, pattern) {
+			t.Errorf("tablecell.go missing DecodeJSONField call for %s field — "+
+				"JSON fields will panic on decode with direct type assertion", field)
+		}
+	}
+}
+
+// TestMegatronNeo4j_DecodeNoDirectSliceAssertions verifies that the generated
+// tablecell.go does NOT contain direct type assertions for slice types.
+// These patterns would cause runtime panics because Neo4j returns []interface{}.
+//
+// Must pass: generated code does NOT contain v.([]float64) or v.([]string).
+// If this fails, the decode template is generating broken type assertions.
+func TestMegatronNeo4j_DecodeNoDirectSliceAssertions(t *testing.T) {
+	g, target := neo4jGraph(t)
+	if err := g.Gen(); err != nil {
+		t.Fatalf("Graph.Gen() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(target, "tablecell.go"))
+	if err != nil {
+		t.Fatalf("ReadFile(tablecell.go) error = %v", err)
+	}
+	content := string(data)
+
+	// These direct assertion patterns would panic at runtime because
+	// the Neo4j driver returns []interface{}, not typed Go slices.
+	forbiddenPatterns := []struct {
+		pattern     string
+		description string
+	}{
+		{"v.([]float64)", "direct assertion to []float64 on Neo4j []interface{} data"},
+		{"v.([]string)", "direct assertion to []string on Neo4j []interface{} data"},
+		{"v.([]int)", "direct assertion to []int on Neo4j []interface{} data"},
+		{"v.([]int64)", "direct assertion to []int64 on Neo4j []interface{} data"},
+		{"v.([]bool)", "direct assertion to []bool on Neo4j []interface{} data"},
+	}
+	for _, fp := range forbiddenPatterns {
+		if strings.Contains(content, fp.pattern) {
+			t.Errorf("tablecell.go contains forbidden pattern %q — %s\n"+
+				"Use neo4j.DecodeJSONField instead of direct type assertion for slice/JSON fields",
+				fp.pattern, fp.description)
+		}
+	}
+}
+
+// TestMegatronNeo4j_NonJSONFieldsStillUseDirectAssertion verifies that
+// non-JSON fields (scalars like string, float64) still use direct type
+// assertions. DecodeJSONField should ONLY be used for JSON/slice fields.
+//
+// Must pass: generated code still has direct assertions for scalar fields.
+// This ensures the IsJSON branch doesn't accidentally catch non-JSON fields.
+func TestMegatronNeo4j_NonJSONFieldsStillUseDirectAssertion(t *testing.T) {
+	g, target := neo4jGraph(t)
+	if err := g.Gen(); err != nil {
+		t.Fatalf("Graph.Gen() error = %v", err)
+	}
+
+	// Business has only scalar fields (name: string). Its decode code
+	// should use direct type assertion, not DecodeJSONField.
+	data, err := os.ReadFile(filepath.Join(target, "business.go"))
+	if err != nil {
+		t.Fatalf("ReadFile(business.go) error = %v", err)
+	}
+	content := string(data)
+
+	if strings.Contains(content, "DecodeJSONField") {
+		t.Error("business.go should NOT use DecodeJSONField — " +
+			"it has no JSON fields, only scalar string fields")
+	}
+	// Should have a direct assertion for the name field.
+	if !strings.Contains(content, "v.(string)") {
+		t.Error("business.go should use direct type assertion v.(string) for the name field")
+	}
+}
+
 // testBuildCmd returns an *exec.Cmd for running 'go build' in the given dir.
 func testBuildCmd(dir string) *exec.Cmd {
 	cmd := exec.Command("go", "build", "./...")

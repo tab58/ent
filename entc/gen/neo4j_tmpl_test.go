@@ -269,6 +269,42 @@ func TestNeo4jDecodeTemplates(t *testing.T) {
 	}
 }
 
+// TestNeo4jDecodeTemplates_JSONFields verifies that the decode templates
+// use DecodeJSONField for JSON/slice fields instead of direct type assertions.
+// The Neo4j driver returns slices as []interface{}, so direct type assertion
+// (e.g., v.([]float64)) panics at runtime. DecodeJSONField handles the
+// conversion safely via JSON round-trip.
+//
+// Expected generated code pattern:
+//
+//	if v, ok := m["tags"]; ok {
+//	    if err := neo4j.DecodeJSONField(v, &u.Tags); err != nil {
+//	        return err
+//	    }
+//	}
+func TestNeo4jDecodeTemplates_JSONFields(t *testing.T) {
+	initTemplates()
+	decodeTemplates := []string{
+		"dialect/neo4j/decode/one",
+		"dialect/neo4j/decode/many",
+	}
+	for _, name := range decodeTemplates {
+		t.Run(name, func(t *testing.T) {
+			tmpl := templates.Lookup(name)
+			if tmpl == nil {
+				t.Fatalf("template %q not found", name)
+			}
+			src := tmpl.Tree.Root.String()
+			if !strings.Contains(src, "IsJSON") {
+				t.Errorf("template %q missing IsJSON branch — JSON/slice fields will panic on decode", name)
+			}
+			if !strings.Contains(src, "DecodeJSONField") {
+				t.Errorf("template %q missing DecodeJSONField call — JSON/slice fields need safe conversion", name)
+			}
+		})
+	}
+}
+
 // --- Low Priority: Supporting Template Tests ---
 
 // TestNeo4jOpenTemplate verifies the open template generates the
