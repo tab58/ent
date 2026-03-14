@@ -12,12 +12,16 @@ in the LICENSE file in the root directory of this source tree.
 	{{ template "header" . }}
 {{ end }}
 
+{{ if eq $.Storage.Name "neo4j" }}
+import "entgo.io/ent/dialect/neo4j/cypher"
+{{ else }}
 import (
 	"fmt"
 
 	"entgo.io/ent/dialect/gremlin/graph/dsl"
 	"entgo.io/ent/dialect/sql"
 )
+{{ end }}
 
 {{ range $n := $.Nodes -}}
 	// {{ $n.Name }} is the predicate function for {{ $n.Package }} builders.
