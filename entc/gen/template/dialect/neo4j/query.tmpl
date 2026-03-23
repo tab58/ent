@@ -87,12 +87,13 @@ func ({{ $receiver }} *{{ $builder }}) neo4jQuery(context.Context) *cypher.Build
 	{{- end }}
 	gremlin := {{ $receiver }}.neo4jQuery(ctx)
 	{{- if $e.Bidi }}
-		{{ $ident }} = gremlin.Match(fmt.Sprintf("(n)-[:%s]-(m:%s)", {{ $name }}, {{ $e.Type.Package }}.Label))
+		gremlin.Match(fmt.Sprintf("(n)-[:%s]-(m:%s)", {{ $name }}, {{ $e.Type.Package }}.Label))
 	{{- else if $e.IsInverse }}
-		{{ $ident }} = gremlin.Match(fmt.Sprintf("(n)<-[:%s]-(m:%s)", {{ $name }}, {{ $e.Type.Package }}.Label))
+		gremlin.Match(fmt.Sprintf("(n)<-[:%s]-(m:%s)", {{ $name }}, {{ $e.Type.Package }}.Label))
 	{{- else }}
-		{{ $ident }} = gremlin.Match(fmt.Sprintf("(n)-[:%s]->(m:%s)", {{ $name }}, {{ $e.Type.Package }}.Label))
+		gremlin.Match(fmt.Sprintf("(n)-[:%s]->(m:%s)", {{ $name }}, {{ $e.Type.Package }}.Label))
 	{{- end }}
+		{{ $ident }} = gremlin.Match("WITH m AS n")
 {{ end }}
 
 {{/* query/from defines the query generation for an edge query from a given node. */}}
@@ -114,5 +115,6 @@ func ({{ $receiver }} *{{ $builder }}) neo4jQuery(context.Context) *cypher.Build
 	{{- else }}
 		b.Match(fmt.Sprintf("(n:%s {id: %s})-[:%s]->(m:%s)", {{ $n.Package }}.Label, idP, {{ $name }}, {{ $e.Type.Package }}.Label))
 	{{- end }}
+	b.Match("WITH m AS n")
 	{{ $ident }} = b
 {{ end }}
