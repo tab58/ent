@@ -52,8 +52,15 @@ func ({{ $receiver }} *{{ $.Name }}) FromResponse(res *neo4j.Response) error {
 				if err := neo4j.DecodeJSONField(v, &{{ $receiver }}.{{ $f.StructField }}); err != nil {
 					return err
 				}
+			{{- else if $f.NillableValue }}
+				{{- /* Neo4j returns the base type (e.g. string) for non-null values, not a pointer. Assert to base type, then take address. */}}
+				val, ok := v.({{ $f.Type }})
+				if !ok {
+					return fmt.Errorf("unexpected type %T for field {{ $f.Name }}", v)
+				}
+				{{ $receiver }}.{{ $f.StructField }} = &val
 			{{- else }}
-				val, ok := v.({{ if $f.NillableValue }}*{{ end }}{{ $f.Type }})
+				val, ok := v.({{ $f.Type }})
 				if !ok {
 					return fmt.Errorf("unexpected type %T for field {{ $f.Name }}", v)
 				}
@@ -113,8 +120,15 @@ func ({{ $receiver }} *{{ $slice }}) FromResponse(res *neo4j.Response) error {
 					if err := neo4j.DecodeJSONField(v, &node.{{ $f.StructField }}); err != nil {
 						return err
 					}
+				{{- else if $f.NillableValue }}
+					{{- /* Neo4j returns the base type (e.g. string) for non-null values, not a pointer. Assert to base type, then take address. */}}
+					val, ok := v.({{ $f.Type }})
+					if !ok {
+						return fmt.Errorf("unexpected type %T for field {{ $f.Name }}", v)
+					}
+					node.{{ $f.StructField }} = &val
 				{{- else }}
-					val, ok := v.({{ if $f.NillableValue }}*{{ end }}{{ $f.Type }})
+					val, ok := v.({{ $f.Type }})
 					if !ok {
 						return fmt.Errorf("unexpected type %T for field {{ $f.Name }}", v)
 					}
