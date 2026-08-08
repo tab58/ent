@@ -342,8 +342,8 @@ func TestBuilder_EdgeCreation(t *testing.T) {
 		Return("n {.*}")
 
 	got, _ := b.Query()
-	// Multiple MATCH and WHERE clauses, WHERE conditions are ANDed per block
-	want := "MATCH (n:User) MATCH (m:Pet) WHERE n.id = $p0 AND m.id = $p1 CREATE (n)-[:USER_HAS_PET]->(m) RETURN n {.*}"
+	// WHERE is positional: each condition filters the MATCH it follows.
+	want := "MATCH (n:User) WHERE n.id = $p0 MATCH (m:Pet) WHERE m.id = $p1 CREATE (n)-[:USER_HAS_PET]->(m) RETURN n {.*}"
 	if got != want {
 		t.Errorf("Query() = %q, want %q", got, want)
 	}

@@ -28,15 +28,26 @@ func (m *mockNeo4jDB) Close(_ context.Context) error {
 
 // mockRunner is a test double for the queryRunner interface.
 type mockRunner struct {
-	readRecords  []*ndriver.Record
-	writeRecords []*ndriver.Record
-	readErr      error
-	writeErr     error
-	closeErr     error
-	closed       bool
-	lastQuery    string
-	lastParams   map[string]any
-	lastDatabase string
+	readRecords   []*ndriver.Record
+	writeRecords  []*ndriver.Record
+	readErr       error
+	writeErr      error
+	closeErr      error
+	closed        bool
+	lastQuery     string
+	lastParams    map[string]any
+	lastDatabase  string
+	txRunner      txRunner
+	beginErr      error
+	beginDatabase string
+}
+
+func (m *mockRunner) beginTx(_ context.Context, database string) (txRunner, error) {
+	m.beginDatabase = database
+	if m.beginErr != nil {
+		return nil, m.beginErr
+	}
+	return m.txRunner, nil
 }
 
 func (m *mockRunner) executeRead(_ context.Context, database, query string, params map[string]any) ([]*ndriver.Record, error) {
@@ -76,20 +87,21 @@ func TestDriver_Dialect(t *testing.T) {
 	}
 }
 
-func TestDriver_Tx_ReturnsNopTx(t *testing.T) {
-	d := &Driver{}
+func TestDriver_Tx_ReturnsRealTx(t *testing.T) {
+	tr := &mockTxRunner{}
+	d := &Driver{runner: &mockRunner{txRunner: tr}, database: "neo4j"}
 	tx, err := d.Tx(context.Background())
 	if err != nil {
 		t.Fatalf("Tx() error = %v", err)
 	}
-	if tx == nil {
-		t.Fatal("Tx() returned nil, want NopTx")
+	if _, ok := tx.(*Tx); !ok {
+		t.Fatalf("Tx() returned %T, want *Tx (real transaction, not NopTx)", tx)
 	}
 	if err := tx.Commit(); err != nil {
-		t.Errorf("NopTx.Commit() error = %v", err)
+		t.Errorf("Commit() error = %v", err)
 	}
-	if err := tx.Rollback(); err != nil {
-		t.Errorf("NopTx.Rollback() error = %v", err)
+	if !tr.committed {
+		t.Error("underlying transaction not committed")
 	}
 }
 

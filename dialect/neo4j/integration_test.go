@@ -373,3 +373,250 @@ func TestLiveNeo4j_AllEntityTypes(t *testing.T) {
 		}
 	}
 }
+
+// TestLiveNeo4j_FilteredTraversal is the live repro for the "filtered
+// traversal returns wrong results" bug: predicates on both ends of a
+// traversal must filter start and target respectively.
+// Expected: WHERE emitted positionally, so the query finds the linked pair.
+func TestLiveNeo4j_FilteredTraversal(t *testing.T) {
+	drv := liveDriver(t)
+	ctx := context.Background()
+
+	// Seed: two businesses, two documents, one edge biz-1 -> doc-1.
+	seed := "CREATE (:Business {id: 'biz-1'}), (:Business {id: 'biz-2'}), " +
+		"(:Document {id: 'doc-1'}), (:Document {id: 'doc-2'})"
+	if err := drv.Exec(ctx, seed, map[string]any{}, &Response{}); err != nil {
+		t.Fatalf("seed nodes: %v", err)
+	}
+	link := "MATCH (b:Business {id: 'biz-1'}), (d:Document {id: 'doc-1'}) " +
+		"CREATE (b)-[:BUSINESS_HAS_DOCUMENT]->(d)"
+	if err := drv.Exec(ctx, link, map[string]any{}, &Response{}); err != nil {
+		t.Fatalf("seed edge: %v", err)
+	}
+
+	// Builder call sequence the generated traversal code produces:
+	// parent predicate, traversal MATCH, WITH rebind, child predicate.
+	exists := func(fromID, toID string) bool {
+		b := cypher.New()
+		b.Match("(n:Business)")
+		p0 := b.AddParam(fromID)
+		b.Where("n.id = " + p0)
+		b.Match("(n)-[:BUSINESS_HAS_DOCUMENT]->(m:Document)")
+		b.With("m AS n")
+		p1 := b.AddParam(toID)
+		b.Where("n.id = " + p1)
+		b.Return("count(n)")
+		b.Limit(1)
+		q, p := b.Query()
+		res := &Response{}
+		if err := drv.Query(ctx, q, p, res); err != nil {
+			t.Fatalf("traversal query: %v", err)
+		}
+		n, err := res.ReadInt()
+		if err != nil {
+			t.Fatalf("ReadInt: %v", err)
+		}
+		return n > 0
+	}
+
+	if !exists("biz-1", "doc-1") {
+		t.Error("edge biz-1 -> doc-1 exists but filtered traversal returned false")
+	}
+	if exists("biz-1", "doc-2") {
+		t.Error("no edge biz-1 -> doc-2 but filtered traversal returned true")
+	}
+	if exists("biz-2", "doc-1") {
+		t.Error("no edge biz-2 -> doc-1 but filtered traversal returned true")
+	}
+}
+
+// TestLiveNeo4j_EdgeMergeIdempotent verifies the MERGE relationship pattern
+// the mutation templates emit: re-running the same edge write must not
+// duplicate the relationship.
+func TestLiveNeo4j_EdgeMergeIdempotent(t *testing.T) {
+	drv := liveDriver(t)
+	ctx := context.Background()
+
+	seed := "CREATE (:Business {id: 'biz-m'}), (:Document {id: 'doc-m'})"
+	if err := drv.Exec(ctx, seed, map[string]any{}, &Response{}); err != nil {
+		t.Fatalf("seed nodes: %v", err)
+	}
+
+	// Same builder shape as the update template's edge-add loop.
+	addEdge := func() {
+		b := cypher.New()
+		b.Match("(n:Business)")
+		src := b.AddParam("biz-m")
+		b.Where("n.id = " + src)
+		tgt := b.AddParam("doc-m")
+		b.With("n")
+		b.Match("(m:Document)")
+		b.Where("m.id = " + tgt)
+		b.Merge("(n)-[:BUSINESS_HAS_DOCUMENT]->(m)")
+		b.Return("count(n)")
+		q, p := b.Query()
+		if err := drv.Exec(ctx, q, p, &Response{}); err != nil {
+			t.Fatalf("MERGE edge: %v", err)
+		}
+	}
+	for range 3 {
+		addEdge()
+	}
+
+	res := &Response{}
+	if err := drv.Query(ctx, "MATCH (:Business {id: 'biz-m'})-[r:BUSINESS_HAS_DOCUMENT]->(:Document {id: 'doc-m'}) RETURN count(r)", map[string]any{}, res); err != nil {
+		t.Fatalf("count edges: %v", err)
+	}
+	n, err := res.ReadInt()
+	if err != nil {
+		t.Fatalf("ReadInt: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("edge count after 3 MERGE writes = %d, want 1", n)
+	}
+}
+
+// TestLiveNeo4j_NodeUpsert verifies the MERGE + ON CREATE SET / ON MATCH SET
+// pattern the OnConflict create path emits: first write creates, second
+// write updates mutable properties in place without minting a second node.
+func TestLiveNeo4j_NodeUpsert(t *testing.T) {
+	drv := liveDriver(t)
+	ctx := context.Background()
+
+	upsert := func(name string) {
+		b := cypher.New()
+		id := b.AddParam("biz-up")
+		nameP := b.AddParam(name)
+		created := b.AddParam("t0")
+		b.Merge("(n:Business {id: " + id + "})")
+		b.OnCreateSet("n.name = " + nameP)
+		b.OnCreateSet("n.created_at = " + created)
+		b.OnMatchSet("n.name = " + nameP)
+		b.Return("n {.*}")
+		q, p := b.Query()
+		if err := drv.Exec(ctx, q, p, &Response{}); err != nil {
+			t.Fatalf("upsert: %v", err)
+		}
+	}
+	upsert("First")
+	upsert("Second")
+
+	res := &Response{}
+	if err := drv.Query(ctx, "MATCH (n:Business {id: 'biz-up'}) RETURN n {.*}", map[string]any{}, res); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	all, err := res.ReadNodeMaps()
+	if err != nil {
+		t.Fatalf("ReadNodeMaps: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("node count after 2 upserts = %d, want 1", len(all))
+	}
+	if all[0]["name"] != "Second" {
+		t.Errorf("name = %v, want Second (ON MATCH SET should update)", all[0]["name"])
+	}
+	if all[0]["created_at"] != "t0" {
+		t.Errorf("created_at = %v, want t0 (ON CREATE SET only)", all[0]["created_at"])
+	}
+}
+
+// TestLiveNeo4j_TxCommit tests that statements inside a transaction are
+// invisible until Commit and visible after it.
+func TestLiveNeo4j_TxCommit(t *testing.T) {
+	drv := liveDriver(t)
+	ctx := context.Background()
+
+	tx, err := drv.Tx(ctx)
+	if err != nil {
+		t.Fatalf("Tx() error = %v", err)
+	}
+	if err := tx.Exec(ctx, "CREATE (n:TxTest {id: $id})", map[string]any{"id": "tx-1"}, &Response{}); err != nil {
+		t.Fatalf("Exec in tx: %v", err)
+	}
+
+	// Not visible outside the transaction before commit.
+	res := &Response{}
+	if err := drv.Query(ctx, "MATCH (n:TxTest) RETURN count(n) AS cnt", map[string]any{}, res); err != nil {
+		t.Fatalf("Query outside tx: %v", err)
+	}
+	if cnt, _ := res.records[0].Get("cnt"); cnt.(int64) != 0 {
+		t.Fatalf("uncommitted write visible outside tx: count = %v", cnt)
+	}
+
+	// Visible inside the transaction (read-your-writes).
+	inTx := &Response{}
+	if err := tx.Query(ctx, "MATCH (n:TxTest) RETURN count(n) AS cnt", map[string]any{}, inTx); err != nil {
+		t.Fatalf("Query in tx: %v", err)
+	}
+	if cnt, _ := inTx.records[0].Get("cnt"); cnt.(int64) != 1 {
+		t.Fatalf("tx cannot read its own write: count = %v", cnt)
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	res = &Response{}
+	if err := drv.Query(ctx, "MATCH (n:TxTest) RETURN count(n) AS cnt", map[string]any{}, res); err != nil {
+		t.Fatalf("Query after commit: %v", err)
+	}
+	if cnt, _ := res.records[0].Get("cnt"); cnt.(int64) != 1 {
+		t.Fatalf("committed write not visible: count = %v", cnt)
+	}
+}
+
+// TestLiveNeo4j_TxRollback tests that rolled-back statements leave no
+// trace.
+func TestLiveNeo4j_TxRollback(t *testing.T) {
+	drv := liveDriver(t)
+	ctx := context.Background()
+
+	tx, err := drv.Tx(ctx)
+	if err != nil {
+		t.Fatalf("Tx() error = %v", err)
+	}
+	if err := tx.Exec(ctx, "CREATE (n:TxTest {id: $id})", map[string]any{"id": "tx-rollback"}, &Response{}); err != nil {
+		t.Fatalf("Exec in tx: %v", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+
+	res := &Response{}
+	if err := drv.Query(ctx, "MATCH (n:TxTest) RETURN count(n) AS cnt", map[string]any{}, res); err != nil {
+		t.Fatalf("Query after rollback: %v", err)
+	}
+	if cnt, _ := res.records[0].Get("cnt"); cnt.(int64) != 0 {
+		t.Fatalf("rolled-back write visible: count = %v", cnt)
+	}
+}
+
+// TestLiveNeo4j_TxMultiStatementAtomicity tests the pattern the
+// starscream ingest persister depends on: several statements commit or
+// vanish together.
+func TestLiveNeo4j_TxMultiStatementAtomicity(t *testing.T) {
+	drv := liveDriver(t)
+	ctx := context.Background()
+
+	tx, err := drv.Tx(ctx)
+	if err != nil {
+		t.Fatalf("Tx() error = %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := tx.Exec(ctx, "CREATE (n:TxTest {id: $id})",
+			map[string]any{"id": fmt.Sprintf("multi-%d", i)}, &Response{}); err != nil {
+			t.Fatalf("Exec %d in tx: %v", i, err)
+		}
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+
+	res := &Response{}
+	if err := drv.Query(ctx, "MATCH (n:TxTest) RETURN count(n) AS cnt", map[string]any{}, res); err != nil {
+		t.Fatalf("Query after rollback: %v", err)
+	}
+	if cnt, _ := res.records[0].Get("cnt"); cnt.(int64) != 0 {
+		t.Fatalf("atomicity broken: %v of 3 rolled-back writes visible", cnt)
+	}
+}

@@ -53,21 +53,27 @@ func ({{ $receiver }} *{{ $builder }}) neo4j({{ if $one }}id {{ $.ID.Type }}{{ e
 	b := cypher.New()
 	{{- if $one }}
 		idP := b.AddParam(id)
-		b.Match(fmt.Sprintf("(n:%s) WHERE n.id = %s", {{ $.Package }}.Label, idP))
+		b.Match(fmt.Sprintf("(n:%s)", {{ $.Package }}.Label))
+		b.Where(fmt.Sprintf("n.id = %s", idP))
 	{{- else }}
 		b.Match(fmt.Sprintf("(n:%s)", {{ $.Package }}.Label))
 		for _, p := range {{ $mutation }}.predicates {
 			p(b)
 		}
 	{{- end }}
+	{{- /* Uniqueness guards first, so no SET runs when any guard fails. */}}
+	{{- range $f := $.MutationFields }}
+		{{- if and $f.Unique (or (not $f.Immutable) $f.UpdateDefault) }}
+			if value, ok := {{ $mutation }}.{{ $f.MutationGet }}(); ok {
+				existP := b.AddParam(value)
+				b.Match(fmt.Sprintf("OPTIONAL MATCH (existing:%s {%s: %s})", {{ $.Package }}.Label, {{ $.Package }}.{{ $f.Constant }}, existP))
+				b.Where("existing IS NULL")
+			}
+		{{- end }}
+	{{- end }}
 	{{- range $f := $.MutationFields }}
 		{{- if or (not $f.Immutable) $f.UpdateDefault }}
 			if value, ok := {{ $mutation }}.{{ $f.MutationGet }}(); ok {
-				{{- if $f.Unique }}
-					existP := b.AddParam(value)
-					b.Match(fmt.Sprintf("OPTIONAL MATCH (existing:%s {%s: %s})", {{ $.Package }}.Label, {{ $.Package }}.{{ $f.Constant }}, existP))
-					b.Where("existing IS NULL")
-				{{- end }}
 				p := b.AddParam(value)
 				b.Set(fmt.Sprintf("n.%s = %s", {{ $.Package }}.{{ $f.Constant }}, p))
 			}
@@ -97,32 +103,37 @@ func ({{ $receiver }} *{{ $builder }}) neo4j({{ if $one }}id {{ $.ID.Type }}{{ e
 		{{- /* remove edges */}}
 		{{- if $e.Unique }}
 			if {{ $mutation }}.{{ $e.StructField }}Cleared() {
+				b.With("n")
 				{{- if $e.IsInverse }}
-					b.Match(fmt.Sprintf("WITH n OPTIONAL MATCH (n)<-[r_%s:%s]-()", "{{ $e.Name }}", {{ $name }}))
+					b.Match(fmt.Sprintf("OPTIONAL MATCH (n)<-[r_%s:%s]-()", "{{ $e.Name }}", {{ $name }}))
 				{{- else }}
-					b.Match(fmt.Sprintf("WITH n OPTIONAL MATCH (n)-[r_%s:%s]->()", "{{ $e.Name }}", {{ $name }}))
+					b.Match(fmt.Sprintf("OPTIONAL MATCH (n)-[r_%s:%s]->()", "{{ $e.Name }}", {{ $name }}))
 				{{- end }}
 				b.Delete(fmt.Sprintf("r_%s", "{{ $e.Name }}"))
 			}
 		{{- else }}
 			for _, id := range {{ $mutation }}.Removed{{ $e.StructField }}IDs() {
 				rmP := b.AddParam(id)
+				b.With("n")
 				{{- if $e.IsInverse }}
-					b.Match(fmt.Sprintf("WITH n MATCH (n)<-[r:%s]-(m) WHERE m.id = %s", {{ $name }}, rmP))
+					b.Match(fmt.Sprintf("(n)<-[r:%s]-(m)", {{ $name }}))
 				{{- else }}
-					b.Match(fmt.Sprintf("WITH n MATCH (n)-[r:%s]->(m) WHERE m.id = %s", {{ $name }}, rmP))
+					b.Match(fmt.Sprintf("(n)-[r:%s]->(m)", {{ $name }}))
 				{{- end }}
+				b.Where(fmt.Sprintf("m.id = %s", rmP))
 				b.Delete("r")
 			}
 		{{- end }}
-		{{- /* add edges */}}
+		{{- /* add edges — MERGE so re-running the mutation never duplicates. */}}
 		for _, id := range {{ $mutation }}.{{ $e.StructField }}IDs() {
 			addP := b.AddParam(id)
-			b.Match(fmt.Sprintf("WITH n MATCH (m:%s) WHERE m.id = %s", {{ $e.Type.Package }}.Label, addP))
+			b.With("n")
+			b.Match(fmt.Sprintf("(m:%s)", {{ $e.Type.Package }}.Label))
+			b.Where(fmt.Sprintf("m.id = %s", addP))
 			{{- if $e.IsInverse }}
-				b.Create(fmt.Sprintf("(m)-[:%s]->(n)", {{ $name }}))
+				b.Merge(fmt.Sprintf("(m)-[:%s]->(n)", {{ $name }}))
 			{{- else }}
-				b.Create(fmt.Sprintf("(n)-[:%s]->(m)", {{ $name }}))
+				b.Merge(fmt.Sprintf("(n)-[:%s]->(m)", {{ $name }}))
 			{{- end }}
 		}
 	{{- end }}

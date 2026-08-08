@@ -15,9 +15,15 @@ import (
 type clauseKind int
 
 const (
-	kindMatch  clauseKind = iota
+	kindMatch clauseKind = iota
+	kindWith
+	kindWhere
 	kindCreate
 	kindMerge
+	kindSet
+	kindOnCreateSet
+	kindOnMatchSet
+	kindRemove
 	kindDelete
 )
 
@@ -30,11 +36,13 @@ type clause struct {
 // Builder assembles Cypher query clauses (MATCH, WHERE, CREATE, etc.)
 // and manages parameterized values. It is the Neo4j equivalent of
 // dsl.Traversal for Gremlin and sql.Selector for SQL.
+//
+// All clauses live in a single ordered stream and are emitted in insertion
+// order, so a WHERE filters the MATCH/WITH segment it was added after —
+// not the head of the query. Consecutive WHERE conditions are merged with
+// AND, consecutive SET expressions with commas.
 type Builder struct {
 	clauses []clause
-	where   []string
-	set     []string
-	remove  []string
 	ret     []string
 	orderBy []string
 	skip    *int
@@ -56,9 +64,17 @@ func (b *Builder) Match(pattern string) *Builder {
 	return b
 }
 
-// Where appends a WHERE condition.
+// With appends a WITH clause that rebinds the working row
+// (e.g. With("m AS n") or With("n")).
+func (b *Builder) With(expr string) *Builder {
+	b.clauses = append(b.clauses, clause{kindWith, expr})
+	return b
+}
+
+// Where appends a WHERE condition. The condition applies to the clause
+// segment it follows; consecutive conditions are merged with AND.
 func (b *Builder) Where(cond string) *Builder {
-	b.where = append(b.where, cond)
+	b.clauses = append(b.clauses, clause{kindWhere, cond})
 	return b
 }
 
@@ -74,15 +90,29 @@ func (b *Builder) Merge(pattern string) *Builder {
 	return b
 }
 
-// Set appends a SET expression.
+// Set appends a SET expression. Consecutive expressions are comma-merged.
 func (b *Builder) Set(expr string) *Builder {
-	b.set = append(b.set, expr)
+	b.clauses = append(b.clauses, clause{kindSet, expr})
+	return b
+}
+
+// OnCreateSet appends an ON CREATE SET expression for a preceding MERGE.
+// Consecutive expressions are comma-merged.
+func (b *Builder) OnCreateSet(expr string) *Builder {
+	b.clauses = append(b.clauses, clause{kindOnCreateSet, expr})
+	return b
+}
+
+// OnMatchSet appends an ON MATCH SET expression for a preceding MERGE.
+// Consecutive expressions are comma-merged.
+func (b *Builder) OnMatchSet(expr string) *Builder {
+	b.clauses = append(b.clauses, clause{kindOnMatchSet, expr})
 	return b
 }
 
 // Remove appends a REMOVE expression.
 func (b *Builder) Remove(expr string) *Builder {
-	b.remove = append(b.remove, expr)
+	b.clauses = append(b.clauses, clause{kindRemove, expr})
 	return b
 }
 
@@ -136,10 +166,17 @@ func (b *Builder) SetParam(name string, value any) {
 }
 
 // WhereClauses returns the raw WHERE condition strings without the
-// WHERE keyword. Used by predicate combinators (AND/OR/NOT) to extract
-// conditions from sub-builders without generating nested WHERE keywords.
+// WHERE keyword, in insertion order. Used by predicate combinators
+// (AND/OR/NOT) to extract conditions from sub-builders without
+// generating nested WHERE keywords.
 func (b *Builder) WhereClauses() []string {
-	return b.where
+	var conds []string
+	for _, c := range b.clauses {
+		if c.kind == kindWhere {
+			conds = append(conds, c.content)
+		}
+	}
+	return conds
 }
 
 // Params returns the parameter map. Used by predicate combinators to
@@ -154,67 +191,53 @@ func (b *Builder) Params() map[string]any {
 // This is used by predicate combinators (AND/OR/NOT) to capture
 // individual conditions for recombination without param counter collisions.
 func (b *Builder) CollectWhere(fn func(*Builder)) []string {
-	before := len(b.where)
+	before := len(b.clauses)
 	fn(b)
-	added := b.where[before:]
-	result := make([]string, len(added))
-	copy(result, added)
-	b.where = b.where[:before]
-	return result
+	var conds []string
+	kept := b.clauses[:before]
+	for _, c := range b.clauses[before:] {
+		if c.kind == kindWhere {
+			conds = append(conds, c.content)
+		} else {
+			kept = append(kept, c)
+		}
+	}
+	b.clauses = kept
+	return conds
 }
 
 // Query returns the assembled Cypher query string and its parameters map.
 //
-// Clauses are emitted using a head/body split:
-//  1. Head: leading MATCH clauses (before any non-MATCH or WITH-prefixed clause).
-//  2. WHERE, SET, REMOVE (apply to head MATCHes).
-//  3. Body: remaining clauses in insertion order.
-//  4. Terminal: RETURN, ORDER BY, SKIP, LIMIT.
+// Clauses are emitted in insertion order. Runs of consecutive WHERE
+// conditions are merged into one WHERE joined with AND; runs of SET,
+// ON CREATE SET, and ON MATCH SET expressions are comma-merged.
+// Terminal clauses (RETURN, ORDER BY, SKIP, LIMIT) come last.
 func (b *Builder) Query() (string, map[string]any) {
 	var parts []string
 
-	// Find head boundary: consecutive kindMatch clauses whose content does
-	// NOT start with "WITH " (those belong in the body).
-	headEnd := 0
-	for headEnd < len(b.clauses) {
-		c := b.clauses[headEnd]
-		if c.kind != kindMatch || strings.HasPrefix(c.content, "WITH ") {
-			break
+	for i := 0; i < len(b.clauses); i++ {
+		c := b.clauses[i]
+		// Merge runs of same-kind mergeable clauses.
+		if sep, kw, ok := mergeSpec(c.kind); ok {
+			exprs := []string{c.content}
+			for i+1 < len(b.clauses) && b.clauses[i+1].kind == c.kind {
+				i++
+				exprs = append(exprs, b.clauses[i].content)
+			}
+			parts = append(parts, kw+" "+strings.Join(exprs, sep))
+			continue
 		}
-		headEnd++
-	}
-
-	// Emit head MATCH clauses with smart prefix.
-	for _, c := range b.clauses[:headEnd] {
-		parts = append(parts, matchPrefix(c.content))
-	}
-
-	// WHERE.
-	if len(b.where) > 0 {
-		parts = append(parts, "WHERE "+strings.Join(b.where, " AND "))
-	}
-
-	// SET.
-	if len(b.set) > 0 {
-		parts = append(parts, "SET "+strings.Join(b.set, ", "))
-	}
-
-	// REMOVE.
-	if len(b.remove) > 0 {
-		for _, r := range b.remove {
-			parts = append(parts, "REMOVE "+r)
-		}
-	}
-
-	// Body: remaining clauses in insertion order.
-	for _, c := range b.clauses[headEnd:] {
 		switch c.kind {
 		case kindMatch:
 			parts = append(parts, matchPrefix(c.content))
+		case kindWith:
+			parts = append(parts, "WITH "+c.content)
 		case kindCreate:
 			parts = append(parts, "CREATE "+c.content)
 		case kindMerge:
 			parts = append(parts, "MERGE "+c.content)
+		case kindRemove:
+			parts = append(parts, "REMOVE "+c.content)
 		case kindDelete:
 			if after, ok := strings.CutPrefix(c.content, "DETACH "); ok {
 				parts = append(parts, "DETACH DELETE "+after)
@@ -241,8 +264,28 @@ func (b *Builder) Query() (string, map[string]any) {
 	return strings.Join(parts, " "), b.params
 }
 
+// mergeSpec returns the join separator and keyword for clause kinds whose
+// consecutive runs are merged into a single emitted clause.
+func mergeSpec(k clauseKind) (sep, keyword string, ok bool) {
+	switch k {
+	case kindWhere:
+		return " AND ", "WHERE", true
+	case kindSet:
+		return ", ", "SET", true
+	case kindOnCreateSet:
+		return ", ", "ON CREATE SET", true
+	case kindOnMatchSet:
+		return ", ", "ON MATCH SET", true
+	}
+	return "", "", false
+}
+
 // matchPrefix prepends "MATCH " to content unless it already starts with
-// "OPTIONAL MATCH " or "WITH " (which are self-contained clause prefixes).
+// "OPTIONAL MATCH " or "WITH " (self-contained clause prefixes).
+//
+// Deprecated: the "WITH " sniffing exists only for backward compatibility
+// with callers that smuggle compound clauses through Match. New code should
+// use With, Match, and Where as separate calls.
 func matchPrefix(content string) string {
 	if strings.HasPrefix(content, "OPTIONAL MATCH ") || strings.HasPrefix(content, "WITH ") {
 		return content
@@ -257,9 +300,6 @@ func (b *Builder) Clone() *Builder {
 	}
 	c := &Builder{
 		clauses: clausesCopy(b.clauses),
-		where:   sliceCopy(b.where),
-		set:     sliceCopy(b.set),
-		remove:  sliceCopy(b.remove),
 		ret:     sliceCopy(b.ret),
 		orderBy: sliceCopy(b.orderBy),
 		paramN:  b.paramN,

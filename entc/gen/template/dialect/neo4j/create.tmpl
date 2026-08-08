@@ -6,15 +6,36 @@ in the LICENSE file in the root directory of this source tree.
 
 {{/* gotype: entgo.io/ent/entc/gen.typeScope */}}
 
+{{/* Additional fields on the create builder. */}}
+{{ define "dialect/neo4j/create/fields" }}
+	conflict bool
+{{ end }}
+
 {{ define "dialect/neo4j/create" }}
 {{ $builder := pascal $.Scope.Builder }}
 {{ $receiver := $.Scope.Receiver }}
 {{ $mutation := print $receiver ".mutation"  }}
 
+// OnConflict enables upsert semantics for this create: the node is written
+// with MERGE on its id property. When no node with the id exists, all fields
+// are set; when it exists, all mutable fields are updated in place and
+// immutable fields (e.g. created_at) are left untouched.
+func ({{ $receiver }} *{{ $builder }}) OnConflict() *{{ $builder }} {
+	{{ $receiver }}.conflict = true
+	return {{ $receiver }}
+}
+
 func ({{ $receiver }} *{{ $builder }}) neo4jSave(ctx context.Context) (*{{ $.Name }}, error) {
 	if err := {{ $receiver }}.check(); err != nil {
 		return nil, err
 	}
+	{{- if $.ID.UserDefined }}
+		if {{ $receiver }}.conflict {
+			if _, ok := {{ $mutation }}.{{ $.ID.MutationGet }}(); !ok {
+				return nil, &ValidationError{Name: "{{ $.ID.Name }}", err: errors.New(`missing "{{ $.Name }}.{{ $.ID.Name }}" for upsert`)}
+			}
+		}
+	{{- end }}
 	res := &neo4j.Response{}
 	query, params := {{ $receiver }}.neo4j().Query()
 	if err := {{ $receiver }}.driver.Exec(ctx, query, params, res); err != nil {
@@ -35,6 +56,9 @@ func ({{ $receiver }} *{{ $builder }}) neo4jSave(ctx context.Context) (*{{ $.Nam
 }
 
 func ({{ $receiver }} *{{ $builder }}) neo4j() *cypher.Builder {
+	if {{ $receiver }}.conflict {
+		return {{ $receiver }}.neo4jUpsert()
+	}
 	b := cypher.New()
 	{{- /* Build property assignments for CREATE. */}}
 	props := make([]string, 0)
@@ -61,6 +85,41 @@ func ({{ $receiver }} *{{ $builder }}) neo4j() *cypher.Builder {
 		}
 	{{- end }}
 	b.Create(fmt.Sprintf("(n:%s {%s})", {{ $.Package }}.Label, strings.Join(props, ", ")))
+	{{ $receiver }}.neo4jEdges(b)
+	b.Return("n {.*}")
+	return b
+}
+
+// neo4jUpsert builds MERGE (n:label {id: $id}) ON CREATE SET … ON MATCH SET …
+// Application-level uniqueness guards are not applied on the upsert path;
+// the node identity is the id property only.
+func ({{ $receiver }} *{{ $builder }}) neo4jUpsert() *cypher.Builder {
+	b := cypher.New()
+	{{- if $.ID.UserDefined }}
+		id, _ := {{ $mutation }}.{{ $.ID.MutationGet }}()
+		idP := b.AddParam(id)
+	{{- else }}
+		idP := b.AddParam({{ $mutation }}.id)
+	{{- end }}
+	b.Merge(fmt.Sprintf("(n:%s {id: %s})", {{ $.Package }}.Label, idP))
+	{{- range $f := $.MutationFields }}
+		if value, ok := {{ $mutation }}.{{ $f.MutationGet }}(); ok {
+			p := b.AddParam(value)
+			b.OnCreateSet(fmt.Sprintf("n.%s = %s", {{ $.Package }}.{{ $f.Constant }}, p))
+			{{- if not $f.Immutable }}
+				b.OnMatchSet(fmt.Sprintf("n.%s = %s", {{ $.Package }}.{{ $f.Constant }}, p))
+			{{- end }}
+		}
+	{{- end }}
+	{{ $receiver }}.neo4jEdges(b)
+	b.Return("n {.*}")
+	return b
+}
+
+// neo4jEdges appends the relationship writes for all edge ids on the
+// mutation. Relationships are written with MERGE so re-running the same
+// mutation never duplicates an edge.
+func ({{ $receiver }} *{{ $builder }}) neo4jEdges(b *cypher.Builder) {
 	{{- range $e := $.Edges }}
 		{{- $name := printf "%s.%s" $.Package $e.LabelConstant }}
 		{{- if $e.IsInverse }}
@@ -68,15 +127,15 @@ func ({{ $receiver }} *{{ $builder }}) neo4j() *cypher.Builder {
 		{{- end }}
 		for _, id := range {{ $mutation }}.{{ $e.StructField }}IDs() {
 			edgeP := b.AddParam(id)
-			b.Match(fmt.Sprintf("WITH n MATCH (m:%s) WHERE m.id = %s", {{ $e.Type.Package }}.Label, edgeP))
+			b.With("n")
+			b.Match(fmt.Sprintf("(m:%s)", {{ $e.Type.Package }}.Label))
+			b.Where(fmt.Sprintf("m.id = %s", edgeP))
 			{{- if $e.IsInverse }}
-				b.Create(fmt.Sprintf("(m)-[:%s]->(n)", {{ $name }}))
+				b.Merge(fmt.Sprintf("(m)-[:%s]->(n)", {{ $name }}))
 			{{- else }}
-				b.Create(fmt.Sprintf("(n)-[:%s]->(m)", {{ $name }}))
+				b.Merge(fmt.Sprintf("(n)-[:%s]->(m)", {{ $name }}))
 			{{- end }}
 		}
 	{{- end }}
-	b.Return("n {.*}")
-	return b
 }
 {{ end }}

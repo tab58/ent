@@ -23,6 +23,7 @@ var neo4jTemplateContract = []struct {
 }{
 	// Core CRUD templates (medium priority)
 	{"dialect/neo4j/create", "neo4jSave(ctx) and neo4j() methods on CreateBuilder"},
+	{"dialect/neo4j/create/fields", "additional fields (conflict flag) on CreateBuilder"},
 	{"dialect/neo4j/query", "neo4jAll(ctx), neo4jCount(ctx), neo4jQuery(ctx) methods"},
 	{"dialect/neo4j/query/path", "edge traversal path patterns for query building"},
 	{"dialect/neo4j/query/from", "reverse edge traversal for inverse edges"},
