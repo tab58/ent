@@ -1794,6 +1794,76 @@ func TestSelector_UnionOrderBy(t *testing.T) {
 	require.Equal(t, `SELECT * FROM "users" WHERE "active" UNION SELECT * FROM "old_users1" ORDER BY "users"."whatever"`, query)
 }
 
+// TestUnionAllFunc verifies the package-level UnionAll (and friends) wrap every
+// branch in parentheses on MySQL/Postgres, enabling per-branch ORDER BY / LIMIT
+// and an optional outer ORDER BY / LIMIT on the union result via a wrapping SELECT.
+// On SQLite the parentheses and per-branch ORDER BY / LIMIT / OFFSET are omitted
+// since SQLite does not support them inside a compound SELECT.
+func TestUnionAllFunc(t *testing.T) {
+	t.Run("BothBranchesParenthesized", func(t *testing.T) {
+		// Default dialect (MySQL) — parens required.
+		migSel := Select("id", "kind").
+			From(Table("migration_deployments")).
+			OrderBy(Desc("end_time"), Desc("id")).
+			Limit(20)
+		schemaSel := Select("id", "kind").
+			From(Table("schema_deployments")).
+			OrderBy(Desc("end_time"), Desc("id")).
+			Limit(20)
+		query, args := UnionAll(migSel, schemaSel).Query()
+		require.Equal(t,
+			"(SELECT `id`, `kind` FROM `migration_deployments` ORDER BY `end_time` DESC, `id` DESC LIMIT 20) UNION ALL (SELECT `id`, `kind` FROM `schema_deployments` ORDER BY `end_time` DESC, `id` DESC LIMIT 20)",
+			query,
+		)
+		require.Nil(t, args)
+	})
+
+	t.Run("WithOuterOrderAndLimit", func(t *testing.T) {
+		// Per-branch LIMIT push-down + outer ORDER BY / LIMIT on the union result,
+		// composed idiomatically via With(...).As(UnionAll(...)).
+		migSel := Select("id", "kind").From(Table("t1")).OrderBy(Desc("end_time")).Limit(20)
+		schemaSel := Select("id", "kind").From(Table("t2")).OrderBy(Desc("end_time")).Limit(20)
+		outer := Select("id", "kind").From(Table("all")).OrderBy(Desc("end_time")).Limit(10).Offset(0)
+		query, _ := Queries{
+			With("all").As(UnionAll(migSel, schemaSel)),
+			outer,
+		}.Query()
+		require.Equal(t,
+			"WITH `all` AS ((SELECT `id`, `kind` FROM `t1` ORDER BY `end_time` DESC LIMIT 20) UNION ALL (SELECT `id`, `kind` FROM `t2` ORDER BY `end_time` DESC LIMIT 20)) SELECT `id`, `kind` FROM `all` ORDER BY `end_time` DESC LIMIT 10 OFFSET 0",
+			query,
+		)
+	})
+
+	t.Run("Postgres", func(t *testing.T) {
+		// Postgres supports parenthesized branches (standard SQL) — same output shape
+		// as MySQL but with double-quoted identifiers. Dialect is inferred from selectors.
+		migSel := Dialect(dialect.Postgres).Select("id").From(Table("t1")).Limit(5)
+		schemaSel := Dialect(dialect.Postgres).Select("id").From(Table("t2")).Limit(5)
+		query, _ := UnionAll(migSel, schemaSel).Query()
+		require.Equal(t, `(SELECT "id" FROM "t1" LIMIT 5) UNION ALL (SELECT "id" FROM "t2" LIMIT 5)`, query)
+	})
+
+	t.Run("SQLite", func(t *testing.T) {
+		// SQLite does not support parenthesized compound-select branches.
+		// Per-branch ORDER BY / LIMIT / OFFSET are silently dropped; branches
+		// are emitted without wrapping parens.
+		// The dialect is inferred from the selectors — no explicit SetDialect needed.
+		migSel := Dialect(dialect.SQLite).Select("id").From(Table("t1")).OrderBy(Desc("end_time")).Limit(20)
+		schemaSel := Dialect(dialect.SQLite).Select("id").From(Table("t2")).OrderBy(Desc("end_time")).Limit(20)
+		query, _ := UnionAll(migSel, schemaSel).Query()
+		// No parens, no ORDER BY, no LIMIT on the branches.
+		require.Equal(t, "SELECT `id` FROM `t1` UNION ALL SELECT `id` FROM `t2`", query)
+	})
+
+	t.Run("Union", func(t *testing.T) {
+		query, _ := Union(
+			Select("*").From(Table("t1")).OrderBy("x"),
+			Select("*").From(Table("t2")).OrderBy("x"),
+		).Query()
+		require.Equal(t, "(SELECT * FROM `t1` ORDER BY `x`) UNION (SELECT * FROM `t2` ORDER BY `x`)", query)
+	})
+}
+
 func TestUpdateBuilder_SetExpr(t *testing.T) {
 	d := Dialect(dialect.Postgres)
 	excluded := d.Table("excluded")
